@@ -8,7 +8,9 @@ import { useLogout } from './useLogout';
 import { useMe } from './useMe';
 
 const NAV = [
+  { href: '/', label: 'Dashboard' },
   { href: '/queue', label: 'Verification queue' },
+  { href: '/reports', label: 'Reports' },
   { href: '/audit', label: 'Audit log' },
 ];
 
@@ -35,7 +37,8 @@ export function AdminShell({ children }: { children: ReactNode }) {
             <nav aria-label="Primary">
               <ul className="flex gap-2">
                 {NAV.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                  const active =
+                    item.href === '/' ? pathname === '/' : pathname === item.href || pathname.startsWith(`${item.href}/`);
                   return (
                     <li key={item.href}>
                       <Link
