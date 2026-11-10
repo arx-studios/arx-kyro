@@ -1,6 +1,6 @@
 'use client';
 
-import { Alert, Badge, Button, Card, DateText, EmptyState, MoneyText, Spinner } from '@kyro/design-system';
+import { Alert, Badge, Card, DateText, EmptyState, Spinner } from '@kyro/design-system';
 import { ApiError, type SwipeAction } from '@kyro/api-client';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -8,8 +8,9 @@ import { useMe } from '@/features/authentication/useMe';
 import { errorMessage } from '@/lib/errors';
 import { ActionButtons, type ActionMode } from './ActionButtons';
 import { usePublicRequest, useSwipe } from './hooks';
-import { ACTION_PAST, EXPENSE_LABELS } from './labels';
-import { FundingSummary } from './RequestSummary';
+import { ACTION_PAST, EXPENSE_LABELS, loginHref } from './labels';
+import { FundingPanel } from '@/features/funding/FundingPanel';
+import { ReportAction } from '@/features/reports/ReportAction';
 
 export function RequestDetailView({ id }: { id: string }) {
   const { user } = useMe();
@@ -46,9 +47,9 @@ export function RequestDetailView({ id }: { id: string }) {
   }
 
   const r = q.data;
+  const detailLogin = loginHref('/discover/' + id);
   const mode: ActionMode = !user ? 'anonymous' : user.roles.includes('DONOR') ? 'donor' : 'readonly';
   const place = [r.institutionName, r.institutionCity, r.institutionCountry].filter(Boolean).join(', ');
-  const remaining = Math.max(0, r.funding.target.amountMinor - r.funding.pledgedMinor - r.funding.confirmedMinor);
 
   async function onAction(action: SwipeAction) {
     if (pending) return; // duplicate clicks while a request is in flight are ignored
@@ -109,38 +110,17 @@ export function RequestDetailView({ id }: { id: string }) {
         <h2 id="funding-heading" className="mb-2 text-lg font-semibold text-navy-900">
           Funding
         </h2>
-        <dl className="mb-3 grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <dt className="text-charcoal-700">Target</dt>
-            <dd className="text-lg font-semibold text-navy-900">
-              <MoneyText amountMinor={r.funding.target.amountMinor} currency={r.funding.target.currency} />
-            </dd>
-          </div>
-          <div>
-            <dt className="text-charcoal-700">Remaining</dt>
-            <dd className="text-lg font-semibold text-navy-900">
-              <MoneyText amountMinor={remaining} currency={r.funding.target.currency} />
-            </dd>
-          </div>
-        </dl>
-        <FundingSummary funding={r.funding} />
+        <FundingPanel
+          requestId={id}
+          funding={r.funding}
+          mode={mode}
+          loginHref={detailLogin}
+        />
         {r.dueDate ? (
           <p className="mt-3 text-sm text-charcoal-700">
             Payment due <DateText value={r.dueDate} timeZone="UTC" />
           </p>
         ) : null}
-      </section>
-
-      <section aria-labelledby="fund-heading" className="flex flex-col gap-2">
-        <h2 id="fund-heading" className="sr-only">
-          Fund this request
-        </h2>
-        <Button disabled aria-describedby="fund-note" size="lg">
-          Fund this request
-        </Button>
-        <p id="fund-note" className="text-sm text-charcoal-700">
-          Pledges are coming soon. KYRO does not take payments in this sandbox.
-        </p>
       </section>
 
       <section aria-labelledby="respond-heading" className="flex flex-col gap-3">
@@ -161,6 +141,15 @@ export function RequestDetailView({ id }: { id: string }) {
         />
         <div role="status" aria-live="polite" className="text-sm text-charcoal-700">
           {message}
+        </div>
+      </section>
+
+      <section aria-labelledby="report-heading" className="flex flex-col gap-1 border-t border-warm-200 pt-4">
+        <h2 id="report-heading" className="text-sm font-semibold text-navy-900">
+          Something wrong with this request?
+        </h2>
+        <div>
+          <ReportAction requestId={id} signedIn={Boolean(user)} loginHref={detailLogin} />
         </div>
       </section>
     </article>

@@ -19,6 +19,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { href: '/discover', label: 'Discover' },
   { href: '/saved', label: 'Saved', roles: ['DONOR'] },
+  { href: '/pledges', label: 'My pledges', roles: ['DONOR'] },
   { href: '/recipient/dashboard', label: 'My requests', roles: ['RECIPIENT'] },
 ];
 
