@@ -38,6 +38,18 @@ tags:
     description: Immutable audit trail.
   - name: Discovery
     description: Donor discovery feed, swipes and saved requests.
+  - name: Funding
+    description: Non-binding pledges and funding summaries. A pledge is not a payment.
+  - name: Reports
+    description: User reports about public requests.
+  - name: Operations
+    description: Admin report queue, moderation holds and dashboard counts.
+  - name: Account
+    description: Password reset and password change.
+  - name: Consents
+    description: Consent history and re-acceptance of policy versions.
+  - name: Mfa
+    description: TOTP multi-factor authentication for staff.
 paths:
   /api/v1/auth/csrf:
     get:
@@ -651,6 +663,462 @@ paths:
         '403': { $ref: '#/components/responses/ProblemForbidden' }
         '404': { $ref: '#/components/responses/ProblemNotFound' }
         '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/funding/requests/{requestId}/pledges:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      operationId: createPledge
+      tags: [Funding]
+      summary: Create a non-binding pledge
+      description: |
+        Requires role DONOR. A pledge is a non-binding statement of intent, not a payment, and
+        it never counts as money raised. Send a fresh `Idempotency-Key` per attempt and reuse it
+        on retry: a replay with the same key and body returns 200 with the existing pledge, the
+        same key with a different body returns 422 `IDEMPOTENCY_KEY_REUSED`. A donor may hold one
+        ACTIVE pledge per request (409 `ACTIVE_PLEDGE_EXISTS`). The amount may not exceed what is
+        still pledgeable (409 `PLEDGE_EXCEEDS_REMAINING`). A request that is not in the public
+        view is 404; own request or past due date is 422 `PLEDGE_NOT_ALLOWED`;
+        `acknowledgeNonBinding` other than true is 422 `VALIDATION_FAILED`.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PledgeCreate' }
+      responses:
+        '200':
+          description: Idempotent replay; the existing pledge.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pledge' }
+        '201':
+          description: Pledge created.
+          headers:
+            Location:
+              description: URL of the created pledge (`/api/v1/funding/pledges/{id}`).
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pledge' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/funding/pledges/{pledgeId}:
+    parameters:
+      - $ref: '#/components/parameters/PledgeId'
+    get:
+      operationId: getPledge
+      tags: [Funding]
+      summary: Get one of my pledges
+      description: Requires role DONOR and ownership; another donor's pledge is 404.
+      responses:
+        '200':
+          description: The pledge.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pledge' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/funding/pledges/{pledgeId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/PledgeId'
+    post:
+      operationId: cancelPledge
+      tags: [Funding]
+      summary: Cancel my pledge
+      description: Requires role DONOR and ownership. 409 `INVALID_STATE_TRANSITION` when the pledge is not ACTIVE.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: The pledge, now CANCELLED with reason DONOR_CANCELLED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pledge' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/me/funding/pledges:
+    get:
+      operationId: listMyPledges
+      tags: [Funding]
+      summary: List my pledges
+      description: Requires role DONOR. Newest first. `request` is null when the request is no longer public.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of the caller's pledges.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PledgePage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/funding/requests/{requestId}/summary:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      operationId: getFundingSummary
+      tags: [Funding]
+      summary: Get the funding summary of a public request
+      description: |
+        Public. 404 when the request is not in the public view. `viewerPledge` is set only for a
+        donor session that holds a pledge on the request. Pledges never count as money raised.
+      security: []
+      responses:
+        '200':
+          description: The funding summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FundingSummary' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/reports:
+    post:
+      operationId: createReport
+      tags: [Reports]
+      summary: Report a public request
+      description: |
+        Any authenticated user. 404 when the request is not in the public view. Reporting your own
+        request is 422 `VALIDATION_FAILED`. `details` is required when `reason` is OTHER (422).
+        A second open report by the same reporter on the same request is 409 `REPORT_ALREADY_OPEN`.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportCreate' }
+      responses:
+        '202':
+          description: Report received.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportReceipt' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/reports:
+    get:
+      operationId: listReports
+      tags: [Operations]
+      summary: List user reports
+      description: Requires role VERIFIER or ADMIN. `queue` OPEN (default) means OPEN plus IN_REVIEW.
+      parameters:
+        - name: queue
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/ReportQueue' }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of reports.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportPage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/reports/{reportId}:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    get:
+      operationId: getReport
+      tags: [Operations]
+      summary: Get a report
+      description: Requires role VERIFIER or ADMIN.
+      responses:
+        '200':
+          description: Report detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportDetail' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/reports/{reportId}/assign:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      operationId: assignReport
+      tags: [Operations]
+      summary: Claim a report
+      description: |
+        Requires role VERIFIER or ADMIN. Assigns the report to the caller and moves it to
+        IN_REVIEW. Idempotent for the holder; 409 `REPORT_ALREADY_ASSIGNED` when held by someone
+        else; 409 `INVALID_STATE_TRANSITION` when already RESOLVED.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: The report, assigned to the caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportDetail' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/reports/{reportId}/resolve:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    post:
+      operationId: resolveReport
+      tags: [Operations]
+      summary: Resolve a report
+      description: |
+        Requires role VERIFIER or ADMIN and assignment to the caller (409
+        `REPORT_NOT_ASSIGNED_TO_YOU`). `holdRequest=true` places a moderation hold that hides the
+        request from discovery and is allowed only with ACTION_TAKEN (422 otherwise).
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportResolutionInput' }
+      responses:
+        '200':
+          description: The resolved report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportDetail' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/requests/{requestId}/hold/release:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      operationId: releaseRequestHold
+      tags: [Operations]
+      summary: Release a moderation hold
+      description: Requires role ADMIN only. 404 when the request has no active hold.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '204': { description: Hold released; the request is public again. }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/dashboard:
+    get:
+      operationId: getAdminDashboard
+      tags: [Operations]
+      summary: Get operational counts
+      description: Requires role VERIFIER or ADMIN.
+      responses:
+        '200':
+          description: Counts for the admin dashboard.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminDashboard' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/password-reset:
+    post:
+      operationId: requestPasswordReset
+      tags: [Account]
+      summary: Request a password reset email
+      description: Always returns 202 whether or not the email exists, so it cannot be used to discover accounts.
+      security: [{ csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordResetRequest' }
+      responses:
+        '202':
+          description: Accepted; an email is sent when applicable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AcceptedMessage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      tags: [Account]
+      summary: Set a new password with a reset token
+      description: A successful reset invalidates every existing session of the user. Invalid, expired or used tokens give 422 `TOKEN_INVALID`.
+      security: [{ csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordResetConfirm' }
+      responses:
+        '204': { description: Password changed. }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/me/password:
+    post:
+      operationId: changePassword
+      tags: [Account]
+      summary: Change my password
+      description: Wrong current password is 422 `CURRENT_PASSWORD_INCORRECT`. Other sessions of the user are invalidated.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '204': { description: Password changed. }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/me/consents:
+    get:
+      operationId: getMyConsents
+      tags: [Consents]
+      summary: Get my consent status and history
+      responses:
+        '200':
+          description: Consent status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsentStatus' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+    post:
+      operationId: acceptCurrentPolicies
+      tags: [Consents]
+      summary: Accept the current policy versions
+      description: The body must name the current versions (422 `CONSENT_VERSION_MISMATCH` otherwise). Appends consent records.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Consents' }
+      responses:
+        '200':
+          description: Updated consent status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConsentStatus' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/mfa/totp/enrollment:
+    post:
+      operationId: startTotpEnrollment
+      tags: [Mfa]
+      summary: Start TOTP enrollment
+      description: Requires role VERIFIER or ADMIN. 409 `MFA_ALREADY_ENROLLED` when a confirmed credential exists. Returns the secret once.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: Pending enrollment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TotpEnrollment' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/mfa/totp/enrollment/confirm:
+    post:
+      operationId: confirmTotpEnrollment
+      tags: [Mfa]
+      summary: Confirm TOTP enrollment
+      description: Requires role VERIFIER or ADMIN. A wrong code is 422 `MFA_CODE_INVALID`. Returns the one-time recovery codes, shown once; the session becomes MFA-verified.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TotpCodeInput' }
+      responses:
+        '200':
+          description: Enrollment confirmed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MfaRecoveryCodes' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/mfa/verify:
+    post:
+      operationId: verifyMfa
+      tags: [Mfa]
+      summary: Verify MFA for this session
+      description: Requires role VERIFIER or ADMIN. Send exactly one of `code` or `recoveryCode` (422 otherwise). A wrong code is 422 `MFA_CODE_INVALID`.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaVerifyRequest' }
+      responses:
+        '200':
+          description: Session is MFA-verified.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/users/{userId}/mfa/reset:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: resetUserMfa
+      tags: [Mfa]
+      summary: Reset a staff member's MFA
+      description: Requires role ADMIN only, and not on yourself. Removes the credential and recovery codes and revokes the user's sessions.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '204': { description: MFA reset. }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
 components:
   securitySchemes:
     sessionCookie:
@@ -690,6 +1158,27 @@ components:
       in: query
       required: false
       schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+    PledgeId:
+      name: pledgeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated key, reused on retry of the same attempt.
+      schema: { type: string, minLength: 8, maxLength: 64, pattern: '^[A-Za-z0-9-]+$' }
   responses:
     ProblemBadRequest:
       description: Malformed request (`MALFORMED_REQUEST`).
@@ -898,6 +1387,10 @@ components:
         recipientProfile: { $ref: '#/components/schemas/ProfileSummary' }
         donorProfile: { $ref: '#/components/schemas/ProfileSummary' }
         createdAt: { type: string, format: date-time }
+        mfa:
+          allOf:
+            - $ref: '#/components/schemas/MfaStatus'
+          description: Present when the user has role VERIFIER or ADMIN.
     UpdateProfileRequest:
       type: object
       properties:
@@ -937,6 +1430,12 @@ components:
           type: integer
           format: int64
           description: Current version, for optimistic locking.
+        clearFields:
+          type: array
+          uniqueItems: true
+          maxItems: 6
+          description: Fields named here are set to null. A field both cleared and given a value is 422 `VALIDATION_FAILED`. Title, expenseType, amount and institutionCountry cannot be cleared.
+          items: { $ref: '#/components/schemas/ClearableRequestField' }
     StatusHistoryEntry:
       type: object
       required: [toStatus, changedAt]
@@ -1174,7 +1673,7 @@ components:
     # ---- Discovery ----
     FundingProgress:
       type: object
-      description: Pledged and confirmed amounts are kept separate. Both are always 0 in this slice.
+      description: 'pledgedMinor = sum of ACTIVE non-binding pledges; confirmedMinor = confirmed payments (0 until payments exist); pledges are never money raised.'
       required: [target, pledgedMinor, confirmedMinor]
       properties:
         target: { $ref: '#/components/schemas/Money' }
@@ -1248,3 +1747,292 @@ components:
           type: array
           items: { $ref: '#/components/schemas/SavedItem' }
         nextCursor: { type: string, nullable: true }
+    # ---- Phase 5 enums ----
+    PledgeStatus:
+      type: string
+      description: LAPSED is reserved and unused.
+      enum: [ACTIVE, CANCELLED, LAPSED]
+    PledgeCancelReason:
+      type: string
+      enum: [DONOR_CANCELLED, REQUEST_WITHDRAWN]
+    ReportReason:
+      type: string
+      enum: [SUSPECTED_FRAUD, ALTERED_DOCUMENT, DUPLICATE_REQUEST, INAPPROPRIATE_CONTENT, PRIVACY_CONCERN, OTHER]
+    ReportStatus:
+      type: string
+      enum: [OPEN, IN_REVIEW, RESOLVED]
+    ReportResolution:
+      type: string
+      enum: [DISMISSED, ACTION_TAKEN]
+    ReportQueue:
+      type: string
+      description: OPEN means OPEN plus IN_REVIEW. MINE is assigned to the caller.
+      default: OPEN
+      enum: [OPEN, MINE, RESOLVED, ALL]
+    PolicyType:
+      type: string
+      enum: [TERMS, PRIVACY]
+    ClearableRequestField:
+      type: string
+      description: Optional request fields that PATCH may set to null.
+      enum: [story, institutionName, institutionCity, courseName, feeReference, dueDate]
+    # ---- Funding ----
+    PledgeCreate:
+      type: object
+      required: [amount, acknowledgeNonBinding]
+      properties:
+        amount: { $ref: '#/components/schemas/Money' }
+        acknowledgeNonBinding:
+          type: boolean
+          description: Must be true. A pledge is not a payment.
+    Pledge:
+      type: object
+      description: A non-binding statement of intent. Not a payment.
+      required: [id, requestId, amount, status, nonBinding, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        requestId: { type: string, format: uuid }
+        amount: { $ref: '#/components/schemas/Money' }
+        status: { $ref: '#/components/schemas/PledgeStatus' }
+        cancelReason:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/PledgeCancelReason'
+          nullable: true
+        nonBinding:
+          type: boolean
+          description: Always true.
+        createdAt: { type: string, format: date-time }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+    PublicRequestRef:
+      type: object
+      required: [id, title, recipientPublicName]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        recipientPublicName: { type: string }
+    PledgeListItem:
+      type: object
+      required: [pledge]
+      properties:
+        pledge: { $ref: '#/components/schemas/Pledge' }
+        request:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/PublicRequestRef'
+          nullable: true
+          description: Null when the request is no longer public.
+    PledgePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PledgeListItem' }
+        nextCursor: { type: string, nullable: true }
+    FundingSummary:
+      type: object
+      description: |
+        `remainingMinor = target - confirmed`; pledges never reduce it. Donor identities are
+        never exposed.
+      required: [requestId, target, confirmedMinor, pledgedMinor, remainingMinor, pledgeableMinor, activePledgeCount, pledgesAreNonBinding]
+      properties:
+        requestId: { type: string, format: uuid }
+        target: { $ref: '#/components/schemas/Money' }
+        confirmedMinor: { type: integer, format: int64, minimum: 0 }
+        pledgedMinor: { type: integer, format: int64, minimum: 0 }
+        remainingMinor: { type: integer, format: int64, minimum: 0 }
+        pledgeableMinor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: target - confirmed - active pledges; the largest pledge that is accepted now.
+        activePledgeCount: { type: integer, format: int64, minimum: 0 }
+        pledgesAreNonBinding:
+          type: boolean
+          description: Always true.
+        viewerPledge:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/Pledge'
+          nullable: true
+          description: The caller's ACTIVE pledge on this request; null when anonymous or none.
+    # ---- Reports and operations ----
+    ReportCreate:
+      type: object
+      required: [requestId, reason]
+      properties:
+        requestId: { type: string, format: uuid }
+        reason: { $ref: '#/components/schemas/ReportReason' }
+        details:
+          type: string
+          maxLength: 2000
+          description: Required (non-blank) when reason is OTHER.
+    ReportReceipt:
+      type: object
+      required: [id, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/ReportStatus' }
+        createdAt: { type: string, format: date-time }
+    ReportSummary:
+      type: object
+      required: [id, requestId, requestTitle, reason, status, reporter, createdAt, requestOnHold]
+      properties:
+        id: { type: string, format: uuid }
+        requestId: { type: string, format: uuid }
+        requestTitle: { type: string }
+        reason: { $ref: '#/components/schemas/ReportReason' }
+        status: { $ref: '#/components/schemas/ReportStatus' }
+        reporter: { $ref: '#/components/schemas/UserSummary' }
+        assignedTo:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+        createdAt: { type: string, format: date-time }
+        resolvedAt: { type: string, format: date-time, nullable: true }
+        resolution:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/ReportResolution'
+          nullable: true
+        requestOnHold: { type: boolean }
+    ReportPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ReportSummary' }
+        nextCursor: { type: string, nullable: true }
+    RequestHold:
+      type: object
+      required: [requestId, reason, placedBy, placedAt]
+      properties:
+        requestId: { type: string, format: uuid }
+        reportId: { type: string, format: uuid, nullable: true }
+        reason: { type: string }
+        placedBy: { $ref: '#/components/schemas/UserSummary' }
+        placedAt: { type: string, format: date-time }
+    ReportDetail:
+      allOf:
+        - $ref: '#/components/schemas/ReportSummary'
+        - type: object
+          required: [requestStatus, otherReports, canResolve]
+          properties:
+            details: { type: string, nullable: true }
+            resolutionNote: { type: string, nullable: true }
+            resolvedBy:
+              type: object
+              allOf:
+                - $ref: '#/components/schemas/UserSummary'
+              nullable: true
+            requestStatus: { $ref: '#/components/schemas/RequestStatus' }
+            latestCaseId: { type: string, format: uuid, nullable: true }
+            hold:
+              type: object
+              allOf:
+                - $ref: '#/components/schemas/RequestHold'
+              nullable: true
+            otherReports:
+              type: array
+              description: Other reports on the same request.
+              items: { $ref: '#/components/schemas/ReportSummary' }
+            canResolve:
+              type: boolean
+              description: Whether the caller may resolve this report now.
+    ReportResolutionInput:
+      type: object
+      required: [resolution, note]
+      properties:
+        resolution: { $ref: '#/components/schemas/ReportResolution' }
+        note: { type: string, minLength: 10, maxLength: 2000 }
+        holdRequest:
+          type: boolean
+          default: false
+          description: Place a moderation hold on the request. Allowed only with ACTION_TAKEN.
+    AdminDashboard:
+      type: object
+      required: [unassignedCases, myOpenCases, openReports, unassignedReports, activeHolds, generatedAt]
+      properties:
+        unassignedCases: { type: integer, format: int64, minimum: 0 }
+        myOpenCases: { type: integer, format: int64, minimum: 0 }
+        openReports: { type: integer, format: int64, minimum: 0 }
+        unassignedReports: { type: integer, format: int64, minimum: 0 }
+        activeHolds: { type: integer, format: int64, minimum: 0 }
+        generatedAt: { type: string, format: date-time }
+    # ---- Account and consents ----
+    PasswordResetRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+    PasswordResetConfirm:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 256 }
+        newPassword: { type: string, format: password, minLength: 12, maxLength: 128 }
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, format: password, minLength: 1, maxLength: 128 }
+        newPassword: { type: string, format: password, minLength: 12, maxLength: 128 }
+    ConsentRecord:
+      type: object
+      required: [policyType, policyVersion, acceptedAt]
+      properties:
+        policyType: { $ref: '#/components/schemas/PolicyType' }
+        policyVersion: { type: string }
+        acceptedAt: { type: string, format: date-time }
+    ConsentStatus:
+      type: object
+      required: [current, reacceptRequired, history]
+      properties:
+        current: { $ref: '#/components/schemas/PolicyVersions' }
+        acceptedTermsVersion: { type: string, nullable: true }
+        acceptedPrivacyVersion: { type: string, nullable: true }
+        reacceptRequired: { type: boolean }
+        history:
+          type: array
+          description: Newest first.
+          items: { $ref: '#/components/schemas/ConsentRecord' }
+    # ---- MFA ----
+    TotpEnrollment:
+      type: object
+      required: [secret, otpauthUri, issuer, accountName]
+      properties:
+        secret: { type: string, description: 'Base32 secret, shown once.' }
+        otpauthUri: { type: string }
+        issuer: { type: string }
+        accountName: { type: string }
+    TotpCodeInput:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$', example: '123456' }
+    MfaVerifyRequest:
+      type: object
+      description: Exactly one of `code` or `recoveryCode` is required (422 otherwise).
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$', example: '123456' }
+        recoveryCode: { type: string, pattern: '^[A-Z0-9]{5}-[A-Z0-9]{5}$', example: ABCDE-12345 }
+    MfaRecoveryCodes:
+      type: object
+      required: [codes]
+      properties:
+        codes:
+          type: array
+          description: One-time recovery codes, shown once.
+          minItems: 10
+          maxItems: 10
+          items: { type: string }
+    MfaStatus:
+      type: object
+      required: [required, enrolled, verified]
+      properties:
+        required: { type: boolean }
+        enrolled: { type: boolean }
+        verified: { type: boolean }

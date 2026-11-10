@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 class ModuleBoundaryTest {
 
     private static final String BASE = "com.kyro.platform.";
-    private static final List<String> MODULES = List.of("identity", "audit", "education", "verification", "discovery", "devseed");
+    private static final List<String> MODULES = List.of("identity", "audit", "education", "verification", "discovery", "devseed", "funding", "operations", "notification");
     /** Modules whose application package other modules may use. */
     private static final List<String> PUBLIC_APPLICATION = List.of("identity", "audit", "education");
 
@@ -61,7 +61,8 @@ class ModuleBoundaryTest {
                 .resideInAPackage(BASE + "devseed..")
                 .should()
                 .dependOnClassesThat()
-                .resideInAnyPackage(BASE + "identity..", BASE + "audit..", BASE + "education..", BASE + "verification..", BASE + "discovery..")
+                .resideInAnyPackage(BASE + "identity..", BASE + "audit..", BASE + "education..", BASE + "verification..", BASE + "discovery..",
+                        BASE + "funding..", BASE + "operations..", BASE + "notification..")
                 .check(CLASSES);
     }
 

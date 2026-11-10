@@ -189,6 +189,183 @@ BEGIN
     IF NOT ok THEN RAISE EXCEPTION 'FAIL: audit_events DELETE allowed'; END IF;
 END $$;
 
+-- Funding: campaigns and pledges (V6) --------------------------------------
+INSERT INTO campaigns (id, request_id, target_minor, currency)
+VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000b2', 250000, 'INR');
+
+INSERT INTO pledges (id, campaign_id, request_id, donor_user_id, amount_minor, currency, idempotency_key)
+VALUES ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-0000000000e1',
+        '00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000a2', 50000, 'INR', 'idem-key-0001');
+
+DO $$
+DECLARE ok boolean;
+BEGIN
+    ok := false;
+    BEGIN
+        INSERT INTO pledges (campaign_id, request_id, donor_user_id, amount_minor, currency, idempotency_key)
+        VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000b2',
+                '00000000-0000-0000-0000-0000000000a3', 0, 'INR', 'idem-key-0002');
+    EXCEPTION WHEN check_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: zero pledge amount accepted'; END IF;
+
+    ok := false;
+    BEGIN
+        INSERT INTO pledges (campaign_id, request_id, donor_user_id, amount_minor, currency, idempotency_key)
+        VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000b2',
+                '00000000-0000-0000-0000-0000000000a3', -5, 'INR', 'idem-key-0003');
+    EXCEPTION WHEN check_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: negative pledge amount accepted'; END IF;
+
+    ok := false;
+    BEGIN
+        INSERT INTO pledges (campaign_id, request_id, donor_user_id, amount_minor, currency, idempotency_key)
+        VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000b2',
+                '00000000-0000-0000-0000-0000000000a2', 1000, 'INR', 'idem-key-0004');
+    EXCEPTION WHEN unique_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: second ACTIVE pledge for same donor and request accepted'; END IF;
+
+    ok := false;
+    BEGIN
+        INSERT INTO pledges (campaign_id, request_id, donor_user_id, amount_minor, currency, status, cancel_reason, idempotency_key)
+        VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000b2',
+                '00000000-0000-0000-0000-0000000000a2', 1000, 'INR', 'CANCELLED', 'DONOR_CANCELLED', 'idem-key-0001');
+    EXCEPTION WHEN unique_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: duplicate (donor, idempotency_key) accepted'; END IF;
+
+    ok := false;
+    BEGIN
+        INSERT INTO pledges (campaign_id, request_id, donor_user_id, amount_minor, currency, status, idempotency_key)
+        VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000b2',
+                '00000000-0000-0000-0000-0000000000a2', 1000, 'INR', 'CANCELLED', 'idem-key-0005');
+    EXCEPTION WHEN check_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: CANCELLED pledge without reason accepted'; END IF;
+
+    -- A CANCELLED pledge alongside the ACTIVE one is allowed, and the progress view ignores it
+    INSERT INTO pledges (campaign_id, request_id, donor_user_id, amount_minor, currency, status, cancel_reason, cancelled_at, idempotency_key)
+    VALUES ('00000000-0000-0000-0000-0000000000e1', '00000000-0000-0000-0000-0000000000b2',
+            '00000000-0000-0000-0000-0000000000a2', 7777, 'INR', 'CANCELLED', 'DONOR_CANCELLED', now(), 'idem-key-0006');
+
+    IF (SELECT pledged_minor FROM funding_request_progress WHERE request_id = '00000000-0000-0000-0000-0000000000b2') <> 50000 THEN
+        RAISE EXCEPTION 'FAIL: funding_request_progress counted a CANCELLED pledge';
+    END IF;
+    IF (SELECT active_pledge_count FROM funding_request_progress WHERE request_id = '00000000-0000-0000-0000-0000000000b2') <> 1 THEN
+        RAISE EXCEPTION 'FAIL: funding_request_progress active_pledge_count wrong';
+    END IF;
+END $$;
+
+-- Operations: reports and holds (V7) ----------------------------------------
+INSERT INTO user_reports (id, reporter_user_id, request_id, reason)
+VALUES ('00000000-0000-0000-0000-000000000aa1', '00000000-0000-0000-0000-0000000000a2',
+        '00000000-0000-0000-0000-0000000000b2', 'SUSPECTED_FRAUD');
+
+DO $$
+DECLARE ok boolean;
+BEGIN
+    ok := false;
+    BEGIN
+        INSERT INTO user_reports (reporter_user_id, request_id, reason)
+        VALUES ('00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-0000000000b2', 'OTHER');
+    EXCEPTION WHEN unique_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: second open report by same reporter on same request accepted'; END IF;
+
+    ok := false;
+    BEGIN
+        INSERT INTO user_reports (reporter_user_id, request_id, reason, status)
+        VALUES ('00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000b2', 'OTHER', 'RESOLVED');
+    EXCEPTION WHEN check_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: RESOLVED report without resolution accepted'; END IF;
+
+    ok := false;
+    BEGIN
+        INSERT INTO user_reports (reporter_user_id, request_id, reason)
+        VALUES ('00000000-0000-0000-0000-0000000000a3', '00000000-0000-0000-0000-0000000000b2', 'BOGUS');
+    EXCEPTION WHEN check_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: bad report reason accepted'; END IF;
+END $$;
+
+INSERT INTO request_moderation_holds (id, request_id, report_id, reason, placed_by)
+VALUES ('00000000-0000-0000-0000-000000000bb1', '00000000-0000-0000-0000-0000000000b2',
+        '00000000-0000-0000-0000-000000000aa1', 'Held for review', '00000000-0000-0000-0000-0000000000a3');
+
+DO $$
+DECLARE ok boolean;
+BEGIN
+    ok := false;
+    BEGIN
+        INSERT INTO request_moderation_holds (request_id, reason, placed_by)
+        VALUES ('00000000-0000-0000-0000-0000000000b2', 'Second hold', '00000000-0000-0000-0000-0000000000a3');
+    EXCEPTION WHEN unique_violation THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: second active hold on same request accepted'; END IF;
+
+    IF EXISTS (SELECT 1 FROM discovery_public_requests WHERE id = '00000000-0000-0000-0000-0000000000b2') THEN
+        RAISE EXCEPTION 'FAIL: held APPROVED request still in discovery_public_requests';
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_name = 'discovery_public_requests'
+                 AND (column_name LIKE 'fee%' OR column_name LIKE '%document%' OR column_name LIKE '%sha256%' OR column_name LIKE '%email%')) THEN
+        RAISE EXCEPTION 'FAIL: view exposes a private column after V7';
+    END IF;
+
+    -- Releasing the hold makes the request public again, and a new hold is then allowed
+    UPDATE request_moderation_holds SET released_at = now(), released_by = '00000000-0000-0000-0000-0000000000a3'
+    WHERE id = '00000000-0000-0000-0000-000000000bb1';
+    IF NOT EXISTS (SELECT 1 FROM discovery_public_requests WHERE id = '00000000-0000-0000-0000-0000000000b2') THEN
+        RAISE EXCEPTION 'FAIL: released hold still hides the request';
+    END IF;
+    INSERT INTO request_moderation_holds (request_id, reason, placed_by)
+    VALUES ('00000000-0000-0000-0000-0000000000b2', 'Hold again', '00000000-0000-0000-0000-0000000000a3');
+END $$;
+
+-- Identity security (V8) -----------------------------------------------------
+DO $$
+BEGIN
+    IF (SELECT credentials_version FROM users WHERE id = '00000000-0000-0000-0000-0000000000a1') <> 0 THEN
+        RAISE EXCEPTION 'FAIL: credentials_version should default to 0';
+    END IF;
+END $$;
+
+-- Append-only history (V9) ---------------------------------------------------
+INSERT INTO consent_records (id, user_id, policy_type, policy_version)
+VALUES ('00000000-0000-0000-0000-000000000cc1', '00000000-0000-0000-0000-0000000000a1', 'TERMS', '2026-11-01');
+
+INSERT INTO funding_request_status_history (id, request_id, to_status)
+VALUES ('00000000-0000-0000-0000-000000000dd1', '00000000-0000-0000-0000-0000000000b1', 'DRAFT');
+
+DO $$
+DECLARE ok boolean;
+BEGIN
+    ok := false;
+    BEGIN UPDATE verification_decisions SET rationale = 'Tampered rationale text.';
+    EXCEPTION WHEN raise_exception THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: verification_decisions UPDATE allowed'; END IF;
+
+    ok := false;
+    BEGIN DELETE FROM verification_decisions;
+    EXCEPTION WHEN raise_exception THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: verification_decisions DELETE allowed'; END IF;
+
+    ok := false;
+    BEGIN UPDATE funding_request_status_history SET to_status = 'APPROVED';
+    EXCEPTION WHEN raise_exception THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: funding_request_status_history UPDATE allowed'; END IF;
+
+    ok := false;
+    BEGIN DELETE FROM funding_request_status_history;
+    EXCEPTION WHEN raise_exception THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: funding_request_status_history DELETE allowed'; END IF;
+
+    ok := false;
+    BEGIN UPDATE consent_records SET policy_version = 'tampered';
+    EXCEPTION WHEN raise_exception THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: consent_records UPDATE allowed'; END IF;
+
+    ok := false;
+    BEGIN DELETE FROM consent_records;
+    EXCEPTION WHEN raise_exception THEN ok := true; END;
+    IF NOT ok THEN RAISE EXCEPTION 'FAIL: consent_records DELETE allowed'; END IF;
+END $$;
+
 DO $$ BEGIN RAISE NOTICE 'verify.sql: ALL CHECKS PASSED'; END $$;
+
 
 ROLLBACK;

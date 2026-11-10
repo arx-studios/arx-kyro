@@ -28,6 +28,7 @@ server:
         http-only: true
         same-site: lax
         secure: true
+  forward-headers-strategy: ${KYRO_FORWARD_HEADERS_STRATEGY:none}   # staging: native (ALB X-Forwarded-For)
 
 management:
   endpoints:
@@ -75,3 +76,34 @@ kyro:
   seed:
     enabled: ${KYRO_SEED_ENABLED:false}
     password: ${KYRO_SEED_PASSWORD:KyroLocal!2026}
+  funding:            # FundingProperties (FUND-1, funding module)
+    min-pledge-minor: 100
+    currencies: [INR]
+  password-reset:     # PasswordResetProperties (ACCT-1)
+    token-ttl: 30m
+  notifications:      # NotificationProperties (ACCT-1)
+    email-enabled: ${KYRO_NOTIFICATIONS_EMAIL_ENABLED:true}
+  mfa:                # MfaProperties (SEC-2)
+    admin-enforced: ${KYRO_ADMIN_MFA_ENFORCED:false}   # E2E-2 flips the default to true
+    issuer: "KYRO Sandbox"
+    encryption-key: ${KYRO_MFA_ENCRYPTION_KEY:}         # base64 32 bytes; required outside local/test
+    recovery-code-count: 10
+    allowed-skew-steps: 1
+  sessions:           # SessionProperties (SEC-2)
+    revalidate-interval: ${KYRO_SESSION_REVALIDATE_INTERVAL:60s}
+  rate-limits:        # RateLimitProperties (SEC-2, common.security)
+    enabled: ${KYRO_RATE_LIMITS_ENABLED:true}
+    rules:            # key: IP | USER (USER falls back to IP when anonymous); window = 1 minute
+      - { id: discovery-read,         method: GET,  pattern: /api/v1/discovery/feed/**,                               per-minute: "${KYRO_RATE_DISCOVERY_READ:120}", key: IP }
+      - { id: funding-summary,        method: GET,  pattern: /api/v1/funding/requests/*/summary,                      per-minute: "${KYRO_RATE_FUNDING_SUMMARY:120}", key: IP }
+      - { id: swipe,                  method: POST, pattern: /api/v1/discovery/requests/*/swipes,                     per-minute: "${KYRO_RATE_SWIPE:60}", key: USER }
+      - { id: pledge-create,          method: POST, pattern: /api/v1/funding/requests/*/pledges,                      per-minute: "${KYRO_RATE_PLEDGE:10}", key: USER }
+      - { id: pledge-cancel,          method: POST, pattern: /api/v1/funding/pledges/*/cancel,                        per-minute: "${KYRO_RATE_PLEDGE_CANCEL:10}", key: USER }
+      - { id: report-create,          method: POST, pattern: /api/v1/reports,                                         per-minute: "${KYRO_RATE_REPORT:5}", key: USER }
+      - { id: password-reset,         method: POST, pattern: /api/v1/auth/password-reset,                             per-minute: "${KYRO_RATE_PASSWORD_RESET:3}", key: IP }
+      - { id: password-reset-confirm, method: POST, pattern: /api/v1/auth/password-reset/confirm,                     per-minute: "${KYRO_RATE_PASSWORD_RESET_CONFIRM:10}", key: IP }
+      - { id: password-change,        method: POST, pattern: /api/v1/me/password,                                     per-minute: "${KYRO_RATE_PASSWORD_CHANGE:5}", key: USER }
+      - { id: mfa-verify,             method: POST, pattern: /api/v1/auth/mfa/verify,                                 per-minute: "${KYRO_RATE_MFA_VERIFY:5}", key: USER }
+      - { id: mfa-enroll-confirm,     method: POST, pattern: /api/v1/auth/mfa/totp/enrollment/confirm,                per-minute: "${KYRO_RATE_MFA_ENROLL:5}", key: USER }
+      - { id: upload-url,             method: POST, pattern: /api/v1/education/requests/*/documents/upload-url,       per-minute: "${KYRO_RATE_UPLOAD_URL:20}", key: USER }
+      - { id: document-view-url,      method: POST, pattern: /api/v1/admin/verification/cases/*/documents/*/view-url, per-minute: "${KYRO_RATE_VIEW_URL:30}", key: USER }
