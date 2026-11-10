@@ -1,31 +1,24 @@
 import { Badge, DateText, MoneyText } from '@kyro/design-system';
 import type { RequestCard } from '@kyro/api-client';
+import { confirmedPercent } from '@/features/funding/amounts';
 import { EXPENSE_LABELS } from './labels';
 
-function pct(part: number, total: number): number {
-  return total > 0 ? Math.min(100, Math.round((part / total) * 100)) : 0;
-}
-
-/** Funding numbers: pledged and confirmed are always shown separately. */
+/** Card funding line: confirmed payments, plus pledges only when there are any (never counted as received). */
 export function FundingSummary({ funding }: { funding: RequestCard['funding'] }) {
   const { target, pledgedMinor, confirmedMinor } = funding;
   return (
-    <dl className="grid grid-cols-2 gap-3 text-sm">
-      <div>
-        <dt className="text-charcoal-700">Pledged</dt>
-        <dd className="font-medium text-charcoal-900">
-          <MoneyText amountMinor={pledgedMinor} currency={target.currency} />
-          <span className="ml-1 text-charcoal-700">({pct(pledgedMinor, target.amountMinor)}%)</span>
-        </dd>
-      </div>
-      <div>
-        <dt className="text-charcoal-700">Confirmed</dt>
-        <dd className="font-medium text-charcoal-900">
-          <MoneyText amountMinor={confirmedMinor} currency={target.currency} />
-          <span className="ml-1 text-charcoal-700">({pct(confirmedMinor, target.amountMinor)}%)</span>
-        </dd>
-      </div>
-    </dl>
+    <div className="flex flex-col gap-1 text-sm">
+      <p className="font-medium text-charcoal-900">
+        <span className="text-charcoal-700">Confirmed </span>
+        <MoneyText amountMinor={confirmedMinor} currency={target.currency} />
+        <span className="ml-1 text-charcoal-700">({confirmedPercent(target.amountMinor, confirmedMinor)}%)</span>
+      </p>
+      {pledgedMinor > 0 ? (
+        <p className="text-charcoal-700">
+          <MoneyText amountMinor={pledgedMinor} currency={target.currency} /> pledged (not yet paid)
+        </p>
+      ) : null}
+    </div>
   );
 }
 

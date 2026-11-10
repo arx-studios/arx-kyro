@@ -71,7 +71,7 @@ describe('SwipeDeck', () => {
     expect(screen.getByRole('heading', { name: 'Fictional tuition 1' })).toBeInTheDocument();
     expect(screen.getByText(/Student 1/)).toBeInTheDocument();
     expect(screen.getByText(/Verified/)).toBeInTheDocument();
-    expect(screen.getByText('Pledged')).toBeInTheDocument();
+    expect(screen.queryByText(/pledged/i)).not.toBeInTheDocument();
     expect(screen.getByText('Confirmed')).toBeInTheDocument();
   });
 

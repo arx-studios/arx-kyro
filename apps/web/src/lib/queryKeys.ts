@@ -13,4 +13,8 @@ export const queryKeys = {
     detail: (id: string) => ['discovery', 'detail', id] as const,
     saved: ['discovery', 'saved'] as const,
   },
+  funding: {
+    summary: (requestId: string) => ['funding', 'summary', requestId] as const,
+    myPledges: ['funding', 'my-pledges'] as const,
+  },
 };
