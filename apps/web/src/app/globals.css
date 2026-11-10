@@ -1,0 +1,14 @@
+@import 'tailwindcss';
+@import '@kyro/design-system/theme.css';
+@source '../../../../packages/design-system/src';
+
+@layer base {
+  html {
+    font-family: var(--font-inter), var(--font-sans);
+    background: var(--color-warm-50);
+    color: var(--color-charcoal-900);
+  }
+  body {
+    min-height: 100dvh;
+  }
+}
