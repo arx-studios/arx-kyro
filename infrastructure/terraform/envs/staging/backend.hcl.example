@@ -1,0 +1,8 @@
+# Copy to backend.hcl (git-ignored) and fill in. Used as: terraform init -backend-config=backend.hcl
+# The state bucket is created manually (see docs/runbooks/terraform-staging.md): private, versioned, encrypted.
+bucket       = "REPLACE-ME-kyro-tfstate-000000000000"
+key          = "kyro/staging/terraform.tfstate"
+region       = "eu-west-1"
+encrypt      = true
+use_lockfile = true # S3-native locking (Terraform >= 1.10), no DynamoDB table
+# kms_key_id = "arn:aws:kms:eu-west-1:000000000000:key/00000000-0000-0000-0000-000000000000"

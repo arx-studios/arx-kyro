@@ -1,0 +1,26 @@
+# Terraform local state and caches
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+tfplan
+
+# Variable files: only the examples are committed
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Backend configs with real bucket names
+*.hcl
+!*.hcl.example
+!.tflint.hcl
+
+# Override files (CI uses one to swap in a local backend for the offline plan)
+*_override.tf
+*_override.tf.json
+
+# Only the staging root commits its provider lock file; modules are validated standalone
+!envs/staging/.terraform.lock.hcl
+modules/**/.terraform.lock.hcl
