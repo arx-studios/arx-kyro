@@ -24,6 +24,36 @@ const KNOWN: Record<string, { title: string; message: string; tone: 'warning' | 
     message: 'Reviewers cannot claim or decide requests they own. Another reviewer must handle this case.',
     tone: 'danger',
   },
+  REPORT_ALREADY_ASSIGNED: {
+    title: 'Report already claimed',
+    message: 'Another reviewer has already claimed this report. Reload to see its current state.',
+    tone: 'warning',
+  },
+  REPORT_NOT_ASSIGNED_TO_YOU: {
+    title: 'You are not the assignee',
+    message: 'Only the reviewer who claimed this report can resolve it. Claim the report first, or reload.',
+    tone: 'warning',
+  },
+  MFA_CODE_INVALID: {
+    title: 'Code not accepted',
+    message: 'That code is incorrect or has expired. Check your authenticator app and try again.',
+    tone: 'warning',
+  },
+  MFA_ALREADY_ENROLLED: {
+    title: 'Already set up',
+    message: 'Two-step verification is already set up for this account. Verify with your authenticator instead.',
+    tone: 'warning',
+  },
+  MFA_REQUIRED: {
+    title: 'Verification required',
+    message: 'Verify with your authenticator app to continue.',
+    tone: 'warning',
+  },
+  MFA_ENROLLMENT_REQUIRED: {
+    title: 'Set up two-step verification',
+    message: 'Staff accounts must set up two-step verification before using the console.',
+    tone: 'warning',
+  },
   VALIDATION_FAILED: {
     title: 'Check the form',
     message: 'The server rejected some of the values you entered.',

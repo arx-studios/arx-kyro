@@ -12,7 +12,13 @@ vi.mock('./useLogout', () => ({ useLogout: () => ({ mutate: vi.fn(), isPending: 
 
 import { RoleGuard } from './RoleGuard';
 
-const user = (roles: string[]) => ({ id: '1', email: 'u@kyro.local', displayName: 'U', roles });
+const user = (roles: string[], mfa?: { required: boolean; enrolled: boolean; verified: boolean }) => ({
+  id: '1',
+  email: 'u@kyro.local',
+  displayName: 'U',
+  roles,
+  ...(mfa ? { mfa } : {}),
+});
 
 describe('RoleGuard', () => {
   beforeEach(() => replace.mockReset());
@@ -48,6 +54,47 @@ describe('RoleGuard', () => {
     useMe.mockReturnValue({ user: null, isLoading: true, error: null });
     render(<RoleGuard><p>secret console</p></RoleGuard>);
     expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('redirects to MFA setup when required and not enrolled', () => {
+    useMe.mockReturnValue({
+      user: user(['VERIFIER'], { required: true, enrolled: false, verified: false }),
+      isLoading: false,
+      error: null,
+    });
+    render(<RoleGuard><p>secret console</p></RoleGuard>);
+    expect(screen.queryByText('secret console')).not.toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith('/mfa/setup?next=%2Fqueue');
+  });
+
+  it('redirects to MFA verify when enrolled but not verified', () => {
+    useMe.mockReturnValue({
+      user: user(['ADMIN'], { required: true, enrolled: true, verified: false }),
+      isLoading: false,
+      error: null,
+    });
+    render(<RoleGuard><p>secret console</p></RoleGuard>);
+    expect(screen.queryByText('secret console')).not.toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith('/mfa/verify?next=%2Fqueue');
+  });
+
+  it('renders children once MFA is verified, or when MFA is not required', () => {
+    useMe.mockReturnValue({
+      user: user(['ADMIN'], { required: true, enrolled: true, verified: true }),
+      isLoading: false,
+      error: null,
+    });
+    const { unmount } = render(<RoleGuard><p>secret console</p></RoleGuard>);
+    expect(screen.getByText('secret console')).toBeInTheDocument();
+    unmount();
+    useMe.mockReturnValue({
+      user: user(['ADMIN'], { required: false, enrolled: false, verified: false }),
+      isLoading: false,
+      error: null,
+    });
+    render(<RoleGuard><p>secret console</p></RoleGuard>);
+    expect(screen.getByText('secret console')).toBeInTheDocument();
     expect(replace).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Alert, Button, Spinner } from '@kyro/design-system';
 import { canAccessConsole } from '@/lib/decision';
+import { mfaRedirectTarget } from '@/lib/mfa';
 import { useLogout } from './useLogout';
 import { useMe } from './useMe';
 
@@ -35,11 +36,16 @@ export function RoleGuard({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
+  const mfaTarget = user && canAccessConsole(user.roles) ? mfaRedirectTarget(user) : null;
+
   useEffect(() => {
-    if (!isLoading && !error && !user) {
+    if (isLoading || error) return;
+    if (!user) {
       router.replace(`/login?next=${encodeURIComponent(pathname || '/queue')}`);
+    } else if (mfaTarget) {
+      router.replace(`${mfaTarget}?next=${encodeURIComponent(pathname || '/')}`);
     }
-  }, [isLoading, error, user, router, pathname]);
+  }, [isLoading, error, user, mfaTarget, router, pathname]);
 
   if (isLoading) {
     return (
@@ -65,5 +71,12 @@ export function RoleGuard({ children }: { children: ReactNode }) {
     );
   }
   if (!canAccessConsole(user.roles)) return <NotAuthorised email={user.email} />;
+  if (mfaTarget) {
+    return (
+      <div className="flex justify-center p-10">
+        <Spinner label="Two-step verification required" />
+      </div>
+    );
+  }
   return <>{children}</>;
 }

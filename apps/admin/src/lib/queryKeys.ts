@@ -1,6 +1,14 @@
 export type QueueName = 'UNASSIGNED' | 'MINE' | 'CLOSED' | 'ALL';
 
+export type ReportQueueName = 'OPEN' | 'MINE' | 'RESOLVED' | 'ALL';
+
 export const queryKeys = {
+  dashboard: ['dashboard'] as const,
+  reports: {
+    all: ['reports'] as const,
+    list: (queue: ReportQueueName) => ['reports', 'list', queue] as const,
+    detail: (reportId: string) => ['reports', 'detail', reportId] as const,
+  },
   me: ['me'] as const,
   cases: {
     all: ['cases'] as const,
