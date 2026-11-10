@@ -1,0 +1,8 @@
+# Test profile overrides (every IT runs with MFA enforcement on and a session re-check on every request).
+kyro:
+  mfa:
+    admin-enforced: true
+    # Test-only AES key (base64, 32 bytes). Allowlisted in .github/gitleaks.toml.
+    encryption-key: "dGVzdC1vbmx5LWtleS1reXJvLW1mYS0zMi1ieXRlcyE="
+  sessions:
+    revalidate-interval: 0s

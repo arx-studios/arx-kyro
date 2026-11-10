@@ -1,5 +1,7 @@
 package com.kyro.platform.common.security;
 
+import jakarta.servlet.http.HttpServletRequest;
+import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -36,7 +38,13 @@ public class SecurityConfig {
             HttpSecurity http,
             SecurityContextRepository securityContextRepository,
             RateLimiter rateLimiter,
-            ProblemResponseWriter problems)
+            ProblemResponseWriter problems,
+            SessionValidator sessionValidator,
+            SessionProperties sessionProperties,
+            MfaProperties mfaProperties,
+            MfaEnrollmentLookup mfaEnrollment,
+            SecurityEventSink securityEvents,
+            Clock clock)
             throws Exception {
         http.securityContext(c -> c.securityContextRepository(securityContextRepository))
                 .csrf(c -> c.spa())
@@ -52,11 +60,15 @@ public class SecurityConfig {
                             if (ex instanceof CsrfException) {
                                 problems.write(req, res, 403, "CSRF_INVALID", "Missing or invalid CSRF token.");
                             } else {
+                                auditAdminDenial(securityEvents, req);
                                 problems.write(
                                         req, res, 403, "FORBIDDEN", "You do not have permission to perform this action.");
                             }
                         }))
+                .addFilterBefore(new SessionGuardFilter(sessionValidator, sessionProperties, clock), CsrfFilter.class)
                 .addFilterBefore(new RateLimitFilter(rateLimiter, problems), CsrfFilter.class)
+                .addFilterAfter(
+                        new MfaEnforcementFilter(mfaProperties, mfaEnrollment, securityEvents, problems), CsrfFilter.class)
                 .authorizeHttpRequests(a -> a
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/csrf")
                         .permitAll()
@@ -95,5 +107,17 @@ public class SecurityConfig {
                         .anyRequest()
                         .authenticated());
         return http.build();
+    }
+
+    /** Route-level 403s on admin paths are audited as ACCESS_DENIED (ROLE_MISSING). 401s are not (too noisy). */
+    private static void auditAdminDenial(SecurityEventSink events, HttpServletRequest req) {
+        String path = req.getRequestURI();
+        if (path.equals("/api/v1/admin") || path.startsWith("/api/v1/admin/")) {
+            try {
+                events.accessDenied(req, "ROLE_MISSING");
+            } catch (RuntimeException ignored) {
+                // auditing must never change the response
+            }
+        }
     }
 }

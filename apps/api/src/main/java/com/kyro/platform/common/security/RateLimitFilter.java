@@ -5,9 +5,15 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/** Not a Spring bean on purpose: it is added to the security filter chain only (see SecurityConfig). */
+/**
+ * Not a Spring bean on purpose: it is added to the security filter chain only (see SecurityConfig). The client IP is
+ * {@code getRemoteAddr()}, which is the real client when {@code server.forward-headers-strategy=native} and the
+ * request comes from a trusted proxy (Tomcat RemoteIpValve).
+ */
 public class RateLimitFilter extends OncePerRequestFilter {
 
     private final RateLimiter limiter;
@@ -21,10 +27,12 @@ public class RateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        String path = request.getRequestURI();
-        int limit = limiter.limitFor(request.getMethod(), path);
-        if (limit >= 0 && !limiter.tryAcquire(request.getRemoteAddr(), path, limit)) {
-            response.setHeader("Retry-After", "60");
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String userId = auth != null && auth.getPrincipal() instanceof KyroPrincipal p ? p.userId().toString() : null;
+        RateLimiter.Decision decision =
+                limiter.check(request.getMethod(), request.getRequestURI(), request.getRemoteAddr(), userId);
+        if (!decision.allowed()) {
+            response.setHeader("Retry-After", Integer.toString(decision.retryAfterSeconds()));
             writer.write(request, response, 429, "RATE_LIMITED", "Too many requests. Try again later.");
             return;
         }
