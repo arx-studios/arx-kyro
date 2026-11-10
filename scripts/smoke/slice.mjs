@@ -190,7 +190,8 @@ async function main() {
 
   step('Health and policies');
   const health = await fetch(`${API}/actuator/health`).catch(() => null);
-  if (health) check(health.status === 200, 'actuator health 200');
+  // A Next proxy (API_URL=http://localhost:3000) does not expose /actuator: 404 is fine there.
+  if (health && health.status !== 404) check(health.status === 200, 'actuator health 200');
   const anon = new Client('anon');
   const pol = await anon.call('GET', '/api/v1/policies/current');
   check(pol.status === 200 && pol.body.termsVersion, 'GET /policies/current', pol);
