@@ -18,7 +18,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 /**
- * JDBC adapter. Reporting read exception (D-018): this module only READS {@code discovery_public_requests},
+ * JDBC adapter. Reporting read exception (D-021): this module only READS {@code discovery_public_requests},
  * {@code funding_requests} and {@code verification_cases} with plain SQL, never importing those modules' Java code,
  * and writes only its own tables.
  */
