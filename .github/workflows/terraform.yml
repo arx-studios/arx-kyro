@@ -1,0 +1,106 @@
+name: Terraform
+
+# Validation only. There is NO apply step and NO AWS credential anywhere in this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infrastructure/terraform/**"
+      - ".github/workflows/terraform.yml"
+  pull_request:
+    paths:
+      - "infrastructure/terraform/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.13.5"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TRIVY_IMAGE: aquasec/trivy:latest
+
+defaults:
+  run:
+    shell: bash
+    working-directory: infrastructure/terraform
+
+jobs:
+  validate:
+    name: fmt, validate, tflint, trivy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform init and validate (every module and env, no backend)
+        run: |
+          set -euo pipefail
+          for dir in modules/* envs/*; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: tflint
+        env:
+          # Avoid anonymous GitHub API rate limits when downloading the AWS ruleset.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tflint --init
+          tflint --recursive
+
+      - name: trivy config (HIGH and CRITICAL fail the build)
+        working-directory: .
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo "$TRIVY_IMAGE" config \
+            --severity HIGH,CRITICAL --exit-code 1 infrastructure/terraform
+
+  offline-plan:
+    name: offline plan (mock credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: validate
+    env:
+      # Mock values only: the provider never calls AWS when offline_plan is true.
+      AWS_ACCESS_KEY_ID: mock
+      AWS_SECRET_ACCESS_KEY: mock
+      AWS_DEFAULT_REGION: eu-west-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # `terraform plan` refuses a configured s3 backend after `init -backend=false`, so swap in a throwaway local
+      # backend through an override file (git-ignored, never committed). No state is read or written remotely.
+      - name: terraform init (throwaway local backend)
+        run: |
+          printf 'terraform {\n  backend "local" {}\n}\n' > envs/staging/backend_override.tf
+          terraform -chdir=envs/staging init
+
+      - name: terraform plan (offline, example vars)
+        run: |
+          terraform -chdir=envs/staging plan \
+            -refresh=false -lock=false -input=false \
+            -var offline_plan=true \
+            -var-file=staging.tfvars.example

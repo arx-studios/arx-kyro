@@ -1,0 +1,39 @@
+# Staging profile (SPRING_PROFILES_ACTIVE=staging). Values come from the ECS task definition (Terraform).
+logging:
+  structured:
+    format:
+      console: ecs
+
+server:
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      # Only the ALB (private VPC addresses, 10.0.0.0/8) is a trusted proxy; X-Forwarded-For from anyone else is ignored.
+      internal-proxies: ${KYRO_INTERNAL_PROXIES:10\.\d{1,3}\.\d{1,3}\.\d{1,3}}
+  servlet:
+    session:
+      cookie:
+        secure: true
+
+spring:
+  mail:
+    port: ${KYRO_MAIL_PORT:587}
+    username: ${KYRO_MAIL_USERNAME:}
+    password: ${KYRO_MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+
+kyro:
+  seed:
+    enabled: false
+  # AWS S3: blank endpoint/keys select the default AWS endpoint and the ECS task IAM role (S3ObjectStorage).
+  storage:
+    endpoint: ${KYRO_S3_ENDPOINT:}
+    public-endpoint: ${KYRO_S3_PUBLIC_ENDPOINT:}
+    access-key: ${KYRO_S3_ACCESS_KEY:}
+    secret-key: ${KYRO_S3_SECRET_KEY:}
