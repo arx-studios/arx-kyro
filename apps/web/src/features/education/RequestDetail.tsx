@@ -23,6 +23,7 @@ import {
   useUpdateRequest,
   useWithdrawRequest,
 } from './hooks';
+import { RecipientFundingPanel } from './FundingPanel';
 import { RequestForm } from './RequestForm';
 import { DOCUMENT_TYPES } from './upload';
 import { EXPENSE_TYPES, toUpdatePayload } from './schemas';
@@ -215,6 +216,8 @@ export function RequestDetail({ id }: { id: string }) {
         </Alert>
       ) : null}
 
+      <RecipientFundingPanel requestId={r.id} approved={r.status === 'APPROVED'} />
+
       <section aria-labelledby="details-h" className="flex flex-col gap-4">
         <h2 id="details-h" className="text-xl font-semibold text-charcoal-900">
           Details
@@ -224,7 +227,7 @@ export function RequestDetail({ id }: { id: string }) {
             key={r.version}
             initial={r}
             submitLabel="Save changes"
-            onSubmit={(values) => update.mutateAsync(toUpdatePayload(values, r.version))}
+            onSubmit={(values) => update.mutateAsync(toUpdatePayload(values, r.version, r))}
           />
         ) : (
           <ReadOnlySummary request={r} />

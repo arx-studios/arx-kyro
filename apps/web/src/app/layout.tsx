@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import '@fontsource-variable/inter';
 import type { ReactNode } from 'react';
 import { AppShell } from '@/components/AppShell';
+import { ConsentGate } from '@/components/ConsentGate';
 import { Providers } from '@/components/Providers';
 import './globals.css';
 
@@ -25,6 +26,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         <Providers>
           <AppShell>{children}</AppShell>
+          <ConsentGate />
         </Providers>
       </body>
     </html>
