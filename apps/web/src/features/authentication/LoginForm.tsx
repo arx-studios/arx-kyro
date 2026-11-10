@@ -75,6 +75,11 @@ export function LoginForm() {
       <Button type="submit" size="lg" loading={formState.isSubmitting}>
         Log in
       </Button>
+      <p className="text-sm">
+        <Link href="/forgot-password" className="inline-flex min-h-11 items-center font-medium text-navy-800 underline">
+          Forgot password?
+        </Link>
+      </p>
       <p className="text-sm text-charcoal-700">
         New to KYRO? <Link href="/register" className="font-medium text-navy-800 underline">Create an account</Link>
       </p>

@@ -86,13 +86,31 @@ export function toCreatePayload(values: RequestFormValues): EducationRequestCrea
   };
 }
 
-export function toUpdatePayload(values: RequestFormValues, version: number): EducationRequestUpdate {
+const CLEARABLE = ['story', 'institutionName', 'institutionCity', 'courseName', 'feeReference', 'dueDate'] as const;
+
+/** Optional fields that had a value on the server and are now empty in the form (D-010, D-015). */
+export function fieldsToClear(values: RequestFormValues, initial?: EducationRequest): (typeof CLEARABLE)[number][] {
+  if (!initial) return [];
+  return CLEARABLE.filter((f) => values[f] === '' && (initial[f] ?? '') !== '');
+}
+
+/**
+ * PATCH body: changed or set optional fields are sent as values; fields the user emptied (that had a value
+ * before) are listed in `clearFields`; untouched empty fields are omitted so the server leaves them alone.
+ */
+export function toUpdatePayload(
+  values: RequestFormValues,
+  version: number,
+  initial?: EducationRequest,
+): EducationRequestUpdate {
+  const clearFields = fieldsToClear(values, initial);
   return {
     title: values.title,
     expenseType: values.expenseType,
     amount: { amountMinor: amountMinorOf(values), currency: CURRENCY },
     institutionCountry: values.institutionCountry || 'IN',
     ...optionalFields(values),
+    ...(clearFields.length > 0 ? { clearFields } : {}),
     version,
   };
 }
