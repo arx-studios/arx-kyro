@@ -1,0 +1,33 @@
+# PLACEHOLDER: no AWS deployment exists yet (see LATER-2: Terraform validate/plan only).
+# Shows the intended GitHub OIDC pattern. Manual trigger only; performs no deploy.
+name: Deploy (placeholder)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment (not wired yet)
+        type: choice
+        options: [staging]
+        default: staging
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy placeholder
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write # needed to request a GitHub OIDC token once an AWS role exists
+    steps:
+      - uses: actions/checkout@v4
+      # Enable once LATER-2 provisions a GitHub OIDC role. No long-lived AWS keys are ever stored.
+      # - uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/<GITHUB_OIDC_ROLE>
+      #     aws-region: <REGION>
+      - name: Not implemented
+        run: echo "No deployment configured. Environment=${{ inputs.environment }}"

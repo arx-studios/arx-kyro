@@ -1,0 +1,17 @@
+.git
+.github
+.claude
+**/node_modules
+**/.next
+**/build
+**/.gradle
+**/dist
+**/coverage
+**/playwright-report
+**/test-results
+.env
+.env.*
+!.env.example
+docs
+e2e
+apps/api
