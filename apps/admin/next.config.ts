@@ -8,6 +8,8 @@ const apiOrigin = process.env.KYRO_API_ORIGIN ?? 'http://localhost:8080';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // The admin app is opened at 127.0.0.1:3001 (cookie isolation from localhost:3000, D-009): allow its dev resources.
+  allowedDevOrigins: ['127.0.0.1'],
   // Monorepo root, so the standalone server lands at apps/admin/server.js.
   outputFileTracingRoot: path.resolve(here, '../..'),
   transpilePackages: ['@kyro/design-system', '@kyro/api-client'],

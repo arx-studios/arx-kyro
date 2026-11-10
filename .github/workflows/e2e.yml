@@ -1,0 +1,111 @@
+name: e2e
+
+# Boots the whole local stack (compose infra, API, web, admin), runs the API smoke script and the
+# Playwright suite for the first vertical slice. Sandbox only: fictional data.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  # The suite registers several accounts and logs in from one IP within a minute.
+  KYRO_AUTH_LOGIN_RATE_PER_MINUTE: "1000"
+  KYRO_AUTH_REGISTER_RATE_PER_MINUTE: "1000"
+  KYRO_AUTH_RESEND_RATE_PER_MINUTE: "1000"
+  SPRING_PROFILES_ACTIVE: local
+
+jobs:
+  e2e:
+    name: Smoke and Playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start infrastructure (postgres, minio, mailpit)
+        run: pnpm infra:up
+
+      - name: Start API (profile local, seeded)
+        run: |
+          nohup ./gradlew :apps:api:bootRun --no-daemon > api.log 2>&1 &
+          echo "started API"
+
+      - name: Build web and admin
+        run: |
+          pnpm --filter @kyro/web build
+          pnpm --filter @kyro/admin build
+
+      - name: Start web (3000) and admin (3001)
+        run: |
+          nohup pnpm --filter @kyro/web start > web.log 2>&1 &
+          nohup pnpm --filter @kyro/admin start > admin.log 2>&1 &
+
+      - name: Wait for the stack
+        run: |
+          wait_for() {
+            for _ in $(seq 1 90); do
+              if curl -fsS "$1" > /dev/null; then echo "up: $1"; return 0; fi
+              sleep 2
+            done
+            echo "timeout waiting for $1"; return 1
+          }
+          wait_for http://localhost:8080/actuator/health
+          wait_for http://localhost:3000/
+          wait_for http://127.0.0.1:3001/login
+
+      - name: API smoke script
+        run: node scripts/smoke/slice.mjs
+
+      - name: Install Playwright Chromium
+        run: pnpm --filter @kyro/e2e exec playwright install --with-deps chromium
+
+      - name: Playwright (web + admin, axe, 320px)
+        run: pnpm --filter @kyro/e2e test
+
+      - name: Upload Playwright report and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload service logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-logs
+          path: |
+            api.log
+            web.log
+            admin.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Stop infrastructure
+        if: always()
+        run: docker compose down -v

@@ -35,7 +35,7 @@ services:
       KYRO_SEED_ENABLED: "true"
       KYRO_SEED_PASSWORD: KyroLocal!2026
     ports:
-      - "8080:8080"
+      - "${KYRO_API_PORT:-8080}:8080"
     healthcheck:
       # The JRE image has no curl; use bash /dev/tcp.
       test:
@@ -61,7 +61,7 @@ services:
     environment:
       KYRO_API_ORIGIN: http://api:8080
     ports:
-      - "3000:3000"
+      - "${KYRO_WEB_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:3000/ || exit 1"]
       interval: 10s
@@ -82,7 +82,7 @@ services:
     environment:
       KYRO_API_ORIGIN: http://api:8080
     ports:
-      - "3001:3001"
+      - "${KYRO_ADMIN_PORT:-3001}:3001"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:3001/ || exit 1"]
       interval: 10s

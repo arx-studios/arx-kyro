@@ -19,6 +19,25 @@ class ObjectStorageIT extends IntegrationTestBase {
     @Autowired
     ObjectStorage storage;
 
+    /**
+     * Sends a request with a fresh HTTP/1.1 client, retrying transport-level failures. MinIO (behind the Docker port
+     * proxy) occasionally closes the connection without answering ("HTTP/1.1 header parser received no bytes"); that
+     * is a transport race, not a result under test. Every request sent here is idempotent (PUT of a fixed key, GET),
+     * and the asserted status codes are never retried, only IOExceptions.
+     */
+    private static <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> handler) throws Exception {
+        IOException last = null;
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            try {
+                return HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build().send(request, handler);
+            } catch (IOException e) {
+                last = e;
+                Thread.sleep(200L * attempt);
+            }
+        }
+        throw last;
+    }
+
     @Test
     void presignedPutThenHeadOpenAndPresignedGetRoundTrip() throws Exception {
         String key = "requests/" + UUID.randomUUID() + "/documents/" + UUID.randomUUID();
@@ -31,7 +50,7 @@ class ObjectStorageIT extends IntegrationTestBase {
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(content));
         // java.net.http forbids setting some headers; the ones signed here (content-type) are allowed.
         put.requiredHeaders().forEach((name, value) -> req.header(name, value));
-        HttpResponse<String> putResponse = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build().send(req.build(), HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> putResponse = send(req.build(), HttpResponse.BodyHandlers.ofString());
         assertThat(putResponse.statusCode()).as(putResponse.body()).isEqualTo(200);
 
         var meta = storage.head(key).orElseThrow();
@@ -43,8 +62,8 @@ class ObjectStorageIT extends IntegrationTestBase {
         }
 
         PresignedUrl get = storage.presignGet(key, Duration.ofMinutes(5));
-        HttpResponse<byte[]> got = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
-                .send(HttpRequest.newBuilder(URI.create(get.url())).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
+        HttpResponse<byte[]> got = send(
+                HttpRequest.newBuilder(URI.create(get.url())).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
         assertThat(got.statusCode()).isEqualTo(200);
         assertThat(got.body()).isEqualTo(content);
 
@@ -58,25 +77,13 @@ class ObjectStorageIT extends IntegrationTestBase {
         String key = "requests/" + UUID.randomUUID() + "/documents/" + UUID.randomUUID();
         byte[] content = "hello".getBytes(StandardCharsets.UTF_8);
         PresignedUrl put = storage.presignPut(key, "application/pdf", content.length, Duration.ofMinutes(5));
-        // MinIO may close the connection right after rejecting the signature while the client is
-        // still writing the body ("HTTP/1.1 header parser received no bytes"). That is a transport
-        // race, not a different outcome, so retry the request; the status must still be 403.
-        HttpResponse<String> response = null;
-        IOException lastError = null;
-        for (int attempt = 0; attempt < 5 && response == null; attempt++) {
-            try {
-                response = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
-                        .send(
-                                HttpRequest.newBuilder(URI.create(put.url()))
-                                        .header("Content-Type", "text/html")
-                                        .PUT(HttpRequest.BodyPublishers.ofByteArray(content))
-                                        .build(),
-                                HttpResponse.BodyHandlers.ofString());
-            } catch (IOException e) {
-                lastError = e;
-            }
-        }
-        assertThat(response).as("response after retries, last error: %s", lastError).isNotNull();
+        HttpResponse<String> response = send(
+                HttpRequest.newBuilder(URI.create(put.url()))
+                        .header("Content-Type", "text/html")
+                        .PUT(HttpRequest.BodyPublishers.ofByteArray(content))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(403);
+        assertThat(storage.head(key)).as("rejected upload must not create the object").isEmpty();
     }
 }
