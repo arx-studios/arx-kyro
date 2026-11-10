@@ -1,0 +1,81 @@
+# KYRO local infrastructure (sandbox only; fictional data).
+name: kyro
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: kyro
+      POSTGRES_USER: kyro
+      POSTGRES_PASSWORD: kyro_local
+    ports:
+      - "5433:5432"
+    volumes:
+      - kyro-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kyro -d kyro"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    # minio/minio is no longer published on Docker Hub; see DECISIONS.md D-004.
+    image: bitnamilegacy/minio:2025.5.24-debian-12-r5
+    environment:
+      MINIO_ROOT_USER: kyro-minio
+      MINIO_ROOT_PASSWORD: kyro-minio-secret
+      MINIO_API_CORS_ALLOW_ORIGIN: "http://localhost:3000,http://127.0.0.1:3001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - kyro-minio:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: bitnamilegacy/minio-client:2025.5.21-debian-12-r4
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: kyro-minio
+      MINIO_ROOT_PASSWORD: kyro-minio-secret
+      MINIO_BUCKET: kyro-documents-local
+    volumes:
+      - ./infrastructure/docker/local/minio-init.sh:/minio-init.sh:ro
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+    restart: "no"
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  flyway:
+    image: flyway/flyway:11-alpine
+    profiles: ["tools"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/kyro
+      FLYWAY_USER: kyro
+      FLYWAY_PASSWORD: kyro_local
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+    volumes:
+      - ./apps/api/src/main/resources/db/migration:/flyway/sql:ro
+
+volumes:
+  kyro-pg:
+  kyro-minio:
