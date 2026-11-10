@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, type Page } from '@playwright/test';
+import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -262,4 +262,101 @@ export async function adminLogin(
   await page.getByLabel('Authenticator code').fill(await nextTotp(secret));
   await page.getByRole('button', { name: 'Verify' }).click();
   await expect(page).not.toHaveURL(/\/(mfa|login)/);
+}
+
+export type Staff = 'verifier' | 'admin';
+export const staffStatePath = (who: Staff): string => `test-results/staff-${who}.json`;
+
+/**
+ * A browser context signed in as seeded staff (password + TOTP). The first call per run logs in through the UI
+ * and caches the session cookies, so later specs do not burn TOTP steps (one use per 30 s step).
+ */
+export async function staffContext(browser: Browser, who: Staff): Promise<BrowserContext> {
+  const path = staffStatePath(who);
+  if (existsSync(path)) return browser.newContext({ storageState: path });
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await adminLogin(page, `${who}@kyro.local`);
+  await ctx.storageState({ path });
+  await page.close();
+  return ctx;
+}
+
+/** Creates and submits a fictional tuition request through the API (document upload included). Returns its id. */
+export async function createSubmittedRequest(api: ApiSession, title: string): Promise<string> {
+  const created = await api.post('/api/v1/education/requests', {
+    title,
+    expenseType: 'TUITION',
+    amount: { amountMinor: 4500000, currency: 'INR' },
+    story: 'Fictional E2E story: the semester fee for a fictional institute is due and I cannot pay it in full.',
+    institutionName: 'Fictional Institute of Technology',
+    institutionCity: 'Pune',
+    institutionCountry: 'IN',
+    courseName: 'B.Tech Computer Science',
+    feeReference: `E2E-REF-${Date.now()}`,
+    dueDate: '2027-12-31',
+  });
+  expect(created.status, 'create request').toBe(201);
+  const id = ((await created.json()) as { id: string }).id;
+  const pdf = fictionalPdf(title);
+  const auth = await api.post(`/api/v1/education/requests/${id}/documents/upload-url`, {
+    documentType: 'TUITION_INVOICE',
+    fileName: 'invoice.pdf',
+    contentType: 'application/pdf',
+    sizeBytes: pdf.length,
+  });
+  expect(auth.status, 'upload-url').toBe(201);
+  const up = (await auth.json()) as { uploadUrl: string; requiredHeaders: Record<string, string>; document: { id: string } };
+  const put = await fetch(up.uploadUrl, { method: 'PUT', headers: up.requiredHeaders, body: new Uint8Array(pdf) });
+  expect(put.ok, 'PUT to MinIO').toBe(true);
+  const done = await api.post(`/api/v1/education/requests/${id}/documents/${up.document.id}/complete`);
+  expect(done.status, 'complete upload').toBe(200);
+  const submit = await api.post(`/api/v1/education/requests/${id}/submit`);
+  expect(submit.status, 'submit').toBe(200);
+  return id;
+}
+
+/** Admin UI: opens the case for `title` from the queue (All tab), claims it when open, and records a decision. */
+export async function decideInAdmin(
+  page: Page,
+  title: string,
+  decision: 'Approve' | 'Request changes' | 'Reject',
+  opts: { rationale: string; message?: string },
+): Promise<void> {
+  await page.goto(`${ADMIN_URL}/queue`);
+  await page.getByRole('tab', { name: 'All' }).click();
+  await page.getByRole('link', { name: title }).first().click();
+  await expect(page).toHaveURL(/\/cases\//);
+  const claim = page.getByRole('button', { name: 'Claim case' });
+  const form = page.getByRole('form', { name: 'Record a decision' });
+  await expect(claim.or(form)).toBeVisible(); // the case has loaded
+  if (await claim.isVisible()) await claim.click();
+  await expect(form).toBeVisible();
+  await page.getByLabel(decision, { exact: true }).check();
+  await page.getByLabel('Internal rationale').fill(opts.rationale);
+  if (opts.message) await page.getByLabel('Message to recipient').fill(opts.message);
+  await page.getByRole('button', { name: 'Review decision' }).click();
+  await page.getByRole('button', { name: `Confirm: ${decision}` }).click();
+  await expect(page.getByRole('form', { name: 'Record a decision' })).toBeHidden();
+}
+
+/** WCAG reflow: no horizontal scrolling at the current (320px) viewport. */
+export async function expectNoHorizontalScroll(page: Page, label: string): Promise<void> {
+  const o = await page.evaluate(() => ({ s: document.documentElement.scrollWidth, w: window.innerWidth }));
+  expect(o.s, `${label}: horizontal overflow at ${o.w}px`).toBeLessThanOrEqual(o.w);
+}
+
+/** Creates a verified+logged-in browser context for a freshly registered user (API registration, UI login). */
+export async function userContext(
+  browser: Browser,
+  email: string,
+  password: string,
+  role: 'DONOR' | 'RECIPIENT',
+): Promise<BrowserContext> {
+  await registerUser(email, password, role);
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await webLogin(page, email, password, role === 'DONOR' ? /\/discover/ : /\/recipient\/dashboard/);
+  await page.close();
+  return ctx;
 }

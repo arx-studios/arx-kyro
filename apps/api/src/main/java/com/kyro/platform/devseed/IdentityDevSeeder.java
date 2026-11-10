@@ -58,6 +58,7 @@ class IdentityDevSeeder implements ApplicationRunner {
             Integer exists = jdbc.queryForObject("SELECT count(*) FROM users WHERE email_normalized = ?", Integer.class, u.email());
             if (exists != null && exists > 0) {
                 seedMfa(u); // idempotent: also upgrades dev databases seeded before MFA existed
+                seedConsents(u);
                 continue;
             }
             UUID id = jdbc.queryForObject(
@@ -81,6 +82,22 @@ class IdentityDevSeeder implements ApplicationRunner {
             }
             log.info("Seeded dev user {} {}", u.email(), u.roles());
             seedMfa(u);
+            seedConsents(u);
+        }
+    }
+
+    /** Seeded users accept the current policies (otherwise the consent gate would block every dev login). Idempotent. */
+    private void seedConsents(SeedUser u) {
+        for (String[] c : new String[][] {
+            {"TERMS", props.policy().termsVersion()}, {"PRIVACY", props.policy().privacyVersion()}
+        }) {
+            jdbc.update(
+                    """
+                    INSERT INTO consent_records (user_id, policy_type, policy_version)
+                    SELECT id, ?, ? FROM users WHERE email_normalized = ?
+                      AND NOT EXISTS (SELECT 1 FROM consent_records r WHERE r.user_id = users.id AND r.policy_type = ?)
+                    """,
+                    c[0], c[1], u.email(), c[0]);
         }
     }
 

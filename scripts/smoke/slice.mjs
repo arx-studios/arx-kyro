@@ -8,6 +8,9 @@
 //
 // Env: API_URL (default http://localhost:8080), MAILPIT_URL (default http://localhost:8025),
 //      SMOKE_SKIP_SELF_REVIEW=1 to skip the step that needs `docker compose exec postgres psql`.
+//
+// Admin MFA is enforced by default: staff logins use the dev TOTP secret (totp.mjs). Run against an API started
+// with the raised limits from docs/runbooks/local-dev.md (the report limit must stay at its default of 5/min).
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { DEV_TOTP_SECRET, nextTotp } from './totp.mjs';

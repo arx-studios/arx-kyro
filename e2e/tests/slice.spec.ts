@@ -3,6 +3,7 @@ import { ADMIN_URL, WEB_URL } from '../playwright.config';
 import {
   SEED_PASSWORD,
   adminLogin,
+  staffStatePath,
   expectNoSeriousA11yViolations,
   fictionalPdf,
   verificationToken,
@@ -109,6 +110,7 @@ test.describe('verifier (admin)', () => {
     await expectNoSeriousA11yViolations(page, 'admin /login');
     // Admin MFA is enforced: password, then the TOTP step (dev seed secret).
     await adminLogin(page, 'verifier@kyro.local');
+    await ctx.storageState({ path: staffStatePath('verifier') }); // reused by the Phase 5 specs (one TOTP use per step)
     await page.goto(`${ADMIN_URL}/queue`);
 
     await page.getByRole('tab', { name: 'All' }).click();
