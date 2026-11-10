@@ -2,6 +2,8 @@ import { expect, test, type Browser, type BrowserContext, type Page } from '@pla
 import { ADMIN_URL, WEB_URL } from '../playwright.config';
 import {
   SEED_PASSWORD,
+  adminLogin,
+  staffStatePath,
   expectNoSeriousA11yViolations,
   fictionalPdf,
   verificationToken,
@@ -106,10 +108,10 @@ test.describe('verifier (admin)', () => {
     await page.goto(`${ADMIN_URL}/login`);
     await page.waitForLoadState('networkidle'); // let React hydrate before submitting the form
     await expectNoSeriousA11yViolations(page, 'admin /login');
-    await page.getByLabel('Email').fill('verifier@kyro.local');
-    await page.getByLabel('Password').fill(SEED_PASSWORD);
-    await page.getByRole('button', { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/queue/);
+    // Admin MFA is enforced: password, then the TOTP step (dev seed secret).
+    await adminLogin(page, 'verifier@kyro.local');
+    await ctx.storageState({ path: staffStatePath('verifier') }); // reused by the Phase 5 specs (one TOTP use per step)
+    await page.goto(`${ADMIN_URL}/queue`);
 
     await page.getByRole('tab', { name: 'All' }).click();
     await page.getByRole('link', { name: title }).click();

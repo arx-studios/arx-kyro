@@ -54,7 +54,6 @@ export function DashboardView() {
               <Link
                 href={t.href}
                 className={cn('block rounded-sm', focusRing)}
-                aria-label={`${t.label}: ${t.value}. Open list`}
               >
                 <span className="block text-sm font-medium text-charcoal-700">{t.label}</span>
                 <span className="mt-1 block text-3xl font-semibold text-navy-900">{t.value}</span>

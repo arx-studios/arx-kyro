@@ -21,6 +21,18 @@ env:
   KYRO_AUTH_LOGIN_RATE_PER_MINUTE: "1000"
   KYRO_AUTH_REGISTER_RATE_PER_MINUTE: "1000"
   KYRO_AUTH_RESEND_RATE_PER_MINUTE: "1000"
+  # Phase 5: admin MFA is enforced (the application default); sessions are revalidated on every request;
+  # per-rule limits that one runner IP or test user would trip are raised. The report limit (5/min) stays at
+  # its default because the smoke script asserts the 429.
+  KYRO_ADMIN_MFA_ENFORCED: "true"
+  KYRO_SESSION_REVALIDATE_INTERVAL: 0s
+  KYRO_RATE_PASSWORD_RESET: "1000"
+  KYRO_RATE_PASSWORD_RESET_CONFIRM: "1000"
+  KYRO_RATE_PASSWORD_CHANGE: "1000"
+  KYRO_RATE_MFA_VERIFY: "1000"
+  KYRO_RATE_MFA_ENROLL: "1000"
+  KYRO_RATE_PLEDGE: "1000"
+  KYRO_RATE_PLEDGE_CANCEL: "1000"
   SPRING_PROFILES_ACTIVE: local
 
 jobs:
