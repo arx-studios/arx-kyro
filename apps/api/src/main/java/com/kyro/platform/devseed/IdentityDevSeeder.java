@@ -1,6 +1,7 @@
 package com.kyro.platform.devseed;
 
 import com.kyro.platform.common.config.KyroProperties;
+import com.kyro.platform.common.security.SecretCipher;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -24,6 +25,9 @@ class IdentityDevSeeder implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(IdentityDevSeeder.class);
 
+    /** Base32 TOTP secret of the dev admin and verifier. Local seed only; allowlisted in gitleaks. */
+    static final String DEV_TOTP_SECRET = "KYROLOCALDEVTOTPAAAAAAAAAAAAAAAA";
+
     private record SeedUser(String email, String displayName, List<String> roles, String recipientName, String donorName) {}
 
     private static final List<SeedUser> USERS = List.of(
@@ -35,8 +39,10 @@ class IdentityDevSeeder implements ApplicationRunner {
     private final JdbcTemplate jdbc;
     private final PasswordEncoder encoder;
     private final KyroProperties props;
+    private final SecretCipher cipher;
 
-    IdentityDevSeeder(JdbcTemplate jdbc, PasswordEncoder encoder, KyroProperties props) {
+    IdentityDevSeeder(JdbcTemplate jdbc, PasswordEncoder encoder, KyroProperties props, SecretCipher cipher) {
+        this.cipher = cipher;
         this.jdbc = jdbc;
         this.encoder = encoder;
         this.props = props;
@@ -51,6 +57,7 @@ class IdentityDevSeeder implements ApplicationRunner {
         for (SeedUser u : USERS) {
             Integer exists = jdbc.queryForObject("SELECT count(*) FROM users WHERE email_normalized = ?", Integer.class, u.email());
             if (exists != null && exists > 0) {
+                seedMfa(u); // idempotent: also upgrades dev databases seeded before MFA existed
                 continue;
             }
             UUID id = jdbc.queryForObject(
@@ -73,6 +80,23 @@ class IdentityDevSeeder implements ApplicationRunner {
                 jdbc.update("INSERT INTO donor_profiles (user_id, public_display_name) VALUES (?, ?)", id, u.donorName());
             }
             log.info("Seeded dev user {} {}", u.email(), u.roles());
+            seedMfa(u);
         }
+    }
+
+    /** Staff dev users get a confirmed TOTP credential with the well-known dev secret (local profile only). */
+    private void seedMfa(SeedUser u) {
+        if (!u.roles().contains("ADMIN") && !u.roles().contains("VERIFIER")) {
+            return;
+        }
+        jdbc.update(
+                """
+                INSERT INTO user_mfa_credentials (user_id, secret_ciphertext, key_id, confirmed_at)
+                SELECT id, ?, ?, now() FROM users WHERE email_normalized = ?
+                ON CONFLICT (user_id) DO NOTHING
+                """,
+                cipher.encrypt(DEV_TOTP_SECRET),
+                SecretCipher.KEY_ID,
+                u.email());
     }
 }

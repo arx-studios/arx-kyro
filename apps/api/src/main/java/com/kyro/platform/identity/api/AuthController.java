@@ -12,6 +12,11 @@ import com.kyro.platform.contract.model.ResendVerificationRequest;
 import com.kyro.platform.contract.model.VerifyEmailRequest;
 import com.kyro.platform.identity.application.AuthService;
 import com.kyro.platform.identity.application.RegisterCommand;
+import com.kyro.platform.identity.application.mfa.MfaService;
+import com.kyro.platform.identity.domain.UserAccountRepository;
+import com.kyro.platform.common.security.SessionAttributes;
+import java.time.Clock;
+import java.time.Instant;
 import com.kyro.platform.identity.domain.UserAccount;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -37,13 +42,22 @@ class AuthController implements AuthApi {
     private final CurrentActor actor;
     private final HttpServletRequest request;
     private final HttpServletResponse response;
+    private final UserAccountRepository credentials;
+    private final MfaService mfa;
+    private final Clock clock;
 
     AuthController(
             AuthService auth,
             SecurityContextRepository contextRepository,
             CurrentActor actor,
             HttpServletRequest request,
-            HttpServletResponse response) {
+            HttpServletResponse response,
+            UserAccountRepository credentials,
+            MfaService mfa,
+            Clock clock) {
+        this.credentials = credentials;
+        this.mfa = mfa;
+        this.clock = clock;
         this.auth = auth;
         this.contextRepository = contextRepository;
         this.actor = actor;
@@ -102,9 +116,11 @@ class AuthController implements AuthApi {
         HttpSession existing = request.getSession(false);
         if (existing != null) {
             request.changeSessionId();
-        } else {
-            request.getSession(true);
         }
+        HttpSession session = request.getSession(true);
+        session.removeAttribute(SessionAttributes.MFA_VERIFIED_AT); // a new login never inherits MFA state
+        session.setAttribute(SessionAttributes.CREDENTIALS_VERSION, credentials.credentialsVersion(user.id()));
+        session.setAttribute(SessionAttributes.LAST_REVALIDATED_AT, Instant.now(clock));
 
         KyroPrincipal principal = new KyroPrincipal(user.id(), user.email(), user.roles());
         var authorities = user.roles().stream()
@@ -116,7 +132,7 @@ class AuthController implements AuthApi {
         contextRepository.saveContext(context, request, response);
 
         auth.recordLoginSucceeded(user.id());
-        return ResponseEntity.ok(UserMapper.toCurrentUser(user));
+        return ResponseEntity.ok(UserMapper.toCurrentUser(user, mfa.status(user.id(), user.roles(), false)));
     }
 
     @Override

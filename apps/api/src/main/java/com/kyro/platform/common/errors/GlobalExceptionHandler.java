@@ -87,7 +87,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler({
         MethodArgumentTypeMismatchException.class,
-        MissingServletRequestParameterException.class
+        MissingServletRequestParameterException.class,
+        org.springframework.web.bind.MissingRequestHeaderException.class
     })
     ResponseEntity<Map<String, Object>> malformed(Exception ex, HttpServletRequest req) {
         return respond(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "The request could not be parsed.", req, List.of());
