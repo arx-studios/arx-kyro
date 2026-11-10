@@ -3,6 +3,7 @@ package com.kyro.platform.common.storage;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.kyro.platform.support.IntegrationTestBase;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -57,13 +58,25 @@ class ObjectStorageIT extends IntegrationTestBase {
         String key = "requests/" + UUID.randomUUID() + "/documents/" + UUID.randomUUID();
         byte[] content = "hello".getBytes(StandardCharsets.UTF_8);
         PresignedUrl put = storage.presignPut(key, "application/pdf", content.length, Duration.ofMinutes(5));
-        HttpResponse<String> response = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
-                .send(
-                        HttpRequest.newBuilder(URI.create(put.url()))
-                                .header("Content-Type", "text/html")
-                                .PUT(HttpRequest.BodyPublishers.ofByteArray(content))
-                                .build(),
-                        HttpResponse.BodyHandlers.ofString());
+        // MinIO may close the connection right after rejecting the signature while the client is
+        // still writing the body ("HTTP/1.1 header parser received no bytes"). That is a transport
+        // race, not a different outcome, so retry the request; the status must still be 403.
+        HttpResponse<String> response = null;
+        IOException lastError = null;
+        for (int attempt = 0; attempt < 5 && response == null; attempt++) {
+            try {
+                response = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
+                        .send(
+                                HttpRequest.newBuilder(URI.create(put.url()))
+                                        .header("Content-Type", "text/html")
+                                        .PUT(HttpRequest.BodyPublishers.ofByteArray(content))
+                                        .build(),
+                                HttpResponse.BodyHandlers.ofString());
+            } catch (IOException e) {
+                lastError = e;
+            }
+        }
+        assertThat(response).as("response after retries, last error: %s", lastError).isNotNull();
         assertThat(response.statusCode()).isEqualTo(403);
     }
 }

@@ -98,6 +98,13 @@ tasks.named("openApiGenerate") {
                         .replace(Regex("[ \\t]*@JsonDeserialize\\([^)]*\\)\\R"), ""),
                 )
             }
+            // Operations whose only declared response body is problem+json (e.g. 204 endpoints) get
+            // `produces = { "application/problem+json" }`, so a client sending `Accept: application/json`
+            // fails handler mapping with HttpMediaTypeNotAcceptableException (500). Drop that lone
+            // produces: the error handler still writes problem+json for failures.
+            val lone = Regex("[ \\t]*produces = \\{ \"application/problem\\+json\" \\},\\R")
+            val current = f.readText()
+            if (lone.containsMatchIn(current)) f.writeText(current.replace(lone, ""))
         }
     }
 }

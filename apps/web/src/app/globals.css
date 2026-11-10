@@ -4,7 +4,7 @@
 
 @layer base {
   html {
-    font-family: var(--font-inter), var(--font-sans);
+    font-family: 'Inter Variable', var(--font-sans);
     background: var(--color-warm-50);
     color: var(--color-charcoal-900);
   }
