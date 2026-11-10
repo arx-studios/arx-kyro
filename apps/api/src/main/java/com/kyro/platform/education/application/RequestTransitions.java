@@ -22,7 +22,11 @@ class RequestTransitions {
     private final AuditService audit;
     private final Clock clock;
 
-    RequestTransitions(EducationStore store, AuditService audit, Clock clock) {
+    private final org.springframework.context.ApplicationEventPublisher events;
+
+    RequestTransitions(
+            EducationStore store, AuditService audit, Clock clock, org.springframework.context.ApplicationEventPublisher events) {
+        this.events = events;
         this.store = store;
         this.audit = audit;
         this.clock = clock;
@@ -40,6 +44,8 @@ class RequestTransitions {
         details.put("from", r.status().name());
         details.put("to", to.name());
         audit.record(new AuditEntry(AuditActions.REQUEST_STATUS_CHANGED, "FUNDING_REQUEST", r.id(), details));
+        events.publishEvent(new com.kyro.platform.education.application.port.EducationRequestStatusChanged(
+                r.id(), r.recipientUserId(), r.title(), r.status().name(), to.name(), now));
         return now;
     }
 }
