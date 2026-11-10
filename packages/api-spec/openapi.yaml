@@ -1,0 +1,1250 @@
+openapi: 3.0.3
+info:
+  title: KYRO Platform API
+  version: 1.0.0
+  description: |
+    Contract for the KYRO first vertical slice (recipient registers, submits a tuition bill,
+    an admin verifies it, the approved request appears in the donor swipe feed).
+
+    Sandbox only: all data is fictional and no real money moves. Money is an integer in minor
+    units plus an ISO 4217 code. Errors are RFC 9457 `application/problem+json`.
+    Authentication is a server-side session cookie (`KYRO_SESSION`); every mutating request
+    must carry the CSRF header `X-XSRF-TOKEN` (obtain it from `GET /api/v1/auth/csrf`).
+  license:
+    name: Proprietary
+    url: https://kyro.local/license
+  contact:
+    name: KYRO Platform
+    url: https://kyro.local
+servers:
+  - url: http://localhost:8080
+    description: Local development
+security:
+  - sessionCookie: []
+tags:
+  - name: Auth
+    description: Registration, email verification, session login/logout and CSRF token.
+  - name: Me
+    description: The current user.
+  - name: Policies
+    description: Current policy versions required for consent.
+  - name: EducationRequests
+    description: Recipient education funding requests.
+  - name: Documents
+    description: Supporting documents for an education request.
+  - name: Verification
+    description: Verifier/admin case review.
+  - name: Audit
+    description: Immutable audit trail.
+  - name: Discovery
+    description: Donor discovery feed, swipes and saved requests.
+paths:
+  /api/v1/auth/csrf:
+    get:
+      operationId: getCsrfToken
+      tags: [Auth]
+      summary: Get a CSRF token
+      description: Returns the CSRF token and sets the `XSRF-TOKEN` cookie.
+      security: []
+      responses:
+        '200':
+          description: CSRF token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CsrfToken' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/register:
+    post:
+      operationId: register
+      tags: [Auth]
+      summary: Register an account
+      description: |
+        Always returns 202 whether or not the email already exists, so it cannot be used to
+        discover accounts. Only RECIPIENT and DONOR roles are allowed.
+      security: [{ csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '202':
+          description: Registration accepted; a verification email is sent when applicable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AcceptedMessage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [Auth]
+      summary: Verify an email address with a token
+      security: [{ csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyEmailRequest' }
+      responses:
+        '204': { description: Email verified. }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/verify-email/resend:
+    post:
+      operationId: resendVerificationEmail
+      tags: [Auth]
+      summary: Resend the verification email
+      security: [{ csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResendVerificationRequest' }
+      responses:
+        '202':
+          description: Accepted regardless of whether the email exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AcceptedMessage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/auth/session:
+    post:
+      operationId: login
+      tags: [Auth]
+      summary: Log in (create a session)
+      description: Logging in before verifying the email returns 403 `EMAIL_NOT_VERIFIED`.
+      security: [{ csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Logged in. Sets the `KYRO_SESSION` cookie.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+    delete:
+      operationId: logout
+      tags: [Auth]
+      summary: Log out (destroy the session)
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '204': { description: Logged out. }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/me:
+    get:
+      operationId: getCurrentUser
+      tags: [Me]
+      summary: Get the current user
+      responses:
+        '200':
+          description: The authenticated user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/me/profile:
+    patch:
+      operationId: updateMyProfile
+      tags: [Me]
+      summary: Update the current user's profile
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProfileRequest' }
+      responses:
+        '200':
+          description: Updated user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/policies/current:
+    get:
+      operationId: getCurrentPolicies
+      tags: [Policies]
+      summary: Get current policy versions
+      security: []
+      responses:
+        '200':
+          description: Current terms and privacy versions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyVersions' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests:
+    post:
+      operationId: createEducationRequest
+      tags: [EducationRequests]
+      summary: Create an education request (draft)
+      description: Requires role RECIPIENT. Only INR is accepted in this slice.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EducationRequestCreate' }
+      responses:
+        '201':
+          description: Draft created.
+          headers:
+            Location:
+              description: URL of the created request.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EducationRequest' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/me/education/requests:
+    get:
+      operationId: listMyEducationRequests
+      tags: [EducationRequests]
+      summary: List my education requests
+      description: Requires role RECIPIENT.
+      responses:
+        '200':
+          description: The caller's requests, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EducationRequestSummaryList' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      operationId: getEducationRequest
+      tags: [EducationRequests]
+      summary: Get an education request
+      description: Requires role RECIPIENT and ownership; otherwise 404.
+      responses:
+        '200':
+          description: The request with documents, status history and reviewer feedback.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EducationRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+    patch:
+      operationId: updateEducationRequest
+      tags: [EducationRequests]
+      summary: Update an education request
+      description: Only DRAFT and CHANGES_REQUESTED are editable (otherwise 409 `INVALID_STATE_TRANSITION`). `version` is used for optimistic locking (409 `STALE_VERSION`).
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EducationRequestUpdate' }
+      responses:
+        '200':
+          description: Updated request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EducationRequest' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests/{requestId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      operationId: submitEducationRequest
+      tags: [EducationRequests]
+      summary: Submit a request for verification
+      description: From DRAFT or CHANGES_REQUESTED. Returns 422 `REQUEST_INCOMPLETE` with field errors when incomplete.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: Request now SUBMITTED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EducationRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests/{requestId}/withdraw:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      operationId: withdrawEducationRequest
+      tags: [EducationRequests]
+      summary: Withdraw a request
+      description: Allowed from DRAFT, SUBMITTED, IN_REVIEW, CHANGES_REQUESTED and APPROVED. WITHDRAWN is terminal.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: Request now WITHDRAWN.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EducationRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests/{requestId}/documents/upload-url:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      operationId: createDocumentUploadUrl
+      tags: [Documents]
+      summary: Authorize a document upload
+      description: Creates a PENDING_UPLOAD document and returns a short-lived presigned PUT URL.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DocumentUploadRequest' }
+      responses:
+        '201':
+          description: Upload authorized.
+          headers:
+            Location:
+              description: URL of the created document.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentUploadAuthorization' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests/{requestId}/documents/{documentId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+      - $ref: '#/components/parameters/DocumentId'
+    post:
+      operationId: completeDocumentUpload
+      tags: [Documents]
+      summary: Confirm a document upload finished
+      description: The server verifies the stored object (size, content type) and marks it UPLOADED, or REJECTED with 422 `DOCUMENT_INVALID`.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: Document marked UPLOADED.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RequestDocument' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests/{requestId}/documents:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      operationId: listRequestDocuments
+      tags: [Documents]
+      summary: List documents of a request
+      responses:
+        '200':
+          description: Documents of the request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RequestDocumentList' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/education/requests/{requestId}/documents/{documentId}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+      - $ref: '#/components/parameters/DocumentId'
+    delete:
+      operationId: deleteRequestDocument
+      tags: [Documents]
+      summary: Delete a document
+      description: Only while the request is DRAFT or CHANGES_REQUESTED.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '204': { description: Document deleted. }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/verification/cases:
+    get:
+      operationId: listVerificationCases
+      tags: [Verification]
+      summary: List verification cases
+      description: Requires role VERIFIER or ADMIN.
+      parameters:
+        - name: queue
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [UNASSIGNED, MINE, CLOSED, ALL]
+            default: UNASSIGNED
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of cases.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationCasePage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/verification/cases/{caseId}:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    get:
+      operationId: getVerificationCase
+      tags: [Verification]
+      summary: Get a verification case
+      responses:
+        '200':
+          description: Case detail including the private request view.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationCaseDetail' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/verification/cases/{caseId}/assign:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    post:
+      operationId: assignVerificationCase
+      tags: [Verification]
+      summary: Claim a case
+      description: Assigns the case to the caller. 409 `CASE_ALREADY_ASSIGNED` if taken. Moves the request to IN_REVIEW.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: Case now ASSIGNED to the caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationCaseDetail' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/verification/cases/{caseId}/decision:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+    post:
+      operationId: decideVerificationCase
+      tags: [Verification]
+      summary: Record a decision
+      description: Only the assignee may decide (409 `CASE_NOT_ASSIGNED_TO_YOU`); a reviewer cannot review their own request (403 `SELF_REVIEW_FORBIDDEN`). `messageToRecipient` is required for REJECT and REQUEST_CHANGES.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionInput' }
+      responses:
+        '200':
+          description: Case closed with the decision.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VerificationCaseDetail' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '409': { $ref: '#/components/responses/ProblemConflict' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/verification/cases/{caseId}/documents/{documentId}/view-url:
+    parameters:
+      - $ref: '#/components/parameters/CaseId'
+      - $ref: '#/components/parameters/DocumentId'
+    post:
+      operationId: createDocumentViewUrl
+      tags: [Verification]
+      summary: Issue a short-lived document view URL
+      description: Audited as DOCUMENT_VIEW_URL_ISSUED.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '200':
+          description: Presigned GET URL.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DocumentViewUrl' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/admin/audit-events:
+    get:
+      operationId: listAuditEvents
+      tags: [Audit]
+      summary: List audit events
+      description: Requires role VERIFIER or ADMIN. Newest first.
+      parameters:
+        - name: entityType
+          in: query
+          required: false
+          schema: { type: string, maxLength: 64 }
+        - name: entityId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: actorUserId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of audit events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEventPage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/discovery/feed:
+    get:
+      operationId: getDiscoveryFeed
+      tags: [Discovery]
+      summary: Get the discovery feed
+      description: Public. Approved requests only; excludes requests already swiped when the caller is a DONOR.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of request cards.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedPage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/discovery/feed/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    get:
+      operationId: getPublicRequest
+      tags: [Discovery]
+      summary: Get a public request detail
+      security: []
+      responses:
+        '200':
+          description: Privacy-safe request detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicRequestDetail' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '429': { $ref: '#/components/responses/ProblemTooManyRequests' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/discovery/requests/{requestId}/swipes:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    post:
+      operationId: recordSwipe
+      tags: [Discovery]
+      summary: Record a swipe
+      description: Requires role DONOR. Idempotent per donor and request; the latest action wins.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SwipeInput' }
+      responses:
+        '200':
+          description: Swipe recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SwipeResult' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '422': { $ref: '#/components/responses/ProblemUnprocessable' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/discovery/saved:
+    get:
+      operationId: listSaved
+      tags: [Discovery]
+      summary: List saved and interested requests
+      description: Requires role DONOR.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: A page of saved items.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedPage' }
+        '400': { $ref: '#/components/responses/ProblemBadRequest' }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+  /api/v1/discovery/saved/{requestId}:
+    parameters:
+      - $ref: '#/components/parameters/RequestId'
+    delete:
+      operationId: removeSaved
+      tags: [Discovery]
+      summary: Remove a saved request
+      description: Requires role DONOR.
+      security: [{ sessionCookie: [], csrfHeader: [] }]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/ProblemUnauthorized' }
+        '403': { $ref: '#/components/responses/ProblemForbidden' }
+        '404': { $ref: '#/components/responses/ProblemNotFound' }
+        '500': { $ref: '#/components/responses/ProblemInternalError' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: KYRO_SESSION
+      description: Server-side session cookie set by `POST /api/v1/auth/session`.
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-XSRF-TOKEN
+      description: CSRF token required on every mutating request (see `GET /api/v1/auth/csrf`).
+  parameters:
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CaseId:
+      name: caseId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque base64url cursor from a previous page.
+      schema: { type: string, maxLength: 512 }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+  responses:
+    ProblemBadRequest:
+      description: Malformed request (`MALFORMED_REQUEST`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemUnauthorized:
+      description: Not authenticated (`UNAUTHENTICATED`, `INVALID_CREDENTIALS`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemForbidden:
+      description: Forbidden (`FORBIDDEN`, `EMAIL_NOT_VERIFIED`, `SELF_REVIEW_FORBIDDEN`, `CSRF_INVALID`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemNotFound:
+      description: Not found, or not visible to the caller (`NOT_FOUND`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemConflict:
+      description: Conflict (`INVALID_STATE_TRANSITION`, `STALE_VERSION`, `CASE_ALREADY_ASSIGNED`, `CASE_NOT_ASSIGNED_TO_YOU`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemUnprocessable:
+      description: Semantically invalid (`VALIDATION_FAILED`, `REQUEST_INCOMPLETE`, `DOCUMENT_INVALID`, `DOCUMENT_LIMIT_REACHED`, `UNSUPPORTED_CURRENCY`, `ROLE_NOT_ALLOWED`, `CONSENT_VERSION_MISMATCH`, `TOKEN_INVALID`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: urn:kyro:problem:VALIDATION_FAILED
+            title: Validation failed
+            status: 422
+            detail: One or more fields are invalid.
+            instance: /api/v1/education/requests
+            code: VALIDATION_FAILED
+            correlationId: 4f1c2b0e-8a53-4d6e-9a43-0c5d1f8b7a21
+            errors:
+              - field: amount.amountMinor
+                message: must be greater than 0
+    ProblemTooManyRequests:
+      description: Rate limited (`RATE_LIMITED`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ProblemInternalError:
+      description: Unexpected error (`INTERNAL_ERROR`). Never leaks stack traces.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    # ---- Enums ----
+    Role:
+      type: string
+      enum: [RECIPIENT, DONOR, VERIFIER, ADMIN]
+    RequestStatus:
+      type: string
+      description: FUNDED and CLOSED are reserved and unused in the first slice.
+      enum: [DRAFT, SUBMITTED, IN_REVIEW, CHANGES_REQUESTED, APPROVED, REJECTED, WITHDRAWN, FUNDED, CLOSED]
+    ExpenseType:
+      type: string
+      enum: [TUITION, EXAMINATION_FEE, COURSE_MATERIALS, OTHER_ACADEMIC]
+    DocumentType:
+      type: string
+      enum: [TUITION_INVOICE, FEE_STATEMENT, ENROLLMENT_PROOF, OTHER]
+    DocumentStatus:
+      type: string
+      enum: [PENDING_UPLOAD, UPLOADED, REJECTED, DELETED]
+    DocumentContentType:
+      type: string
+      enum: [application/pdf, image/jpeg, image/png]
+    CaseStatus:
+      type: string
+      enum: [OPEN, ASSIGNED, CLOSED]
+    CaseOutcome:
+      type: string
+      enum: [APPROVED, REJECTED, CHANGES_REQUESTED, WITHDRAWN]
+    Decision:
+      type: string
+      enum: [APPROVE, REJECT, REQUEST_CHANGES]
+    SwipeAction:
+      type: string
+      enum: [PASS, INTERESTED, SAVED]
+    DuplicateKind:
+      type: string
+      enum: [DOCUMENT_HASH_MATCH, FEE_REFERENCE_MATCH]
+    # ---- Common ----
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, example: 'urn:kyro:problem:VALIDATION_FAILED' }
+        title: { type: string }
+        status: { type: integer, format: int32 }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string, example: VALIDATION_FAILED }
+        correlationId: { type: string }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/FieldError' }
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field: { type: string, example: amount.amountMinor }
+        message: { type: string, example: must be greater than 0 }
+    CsrfToken:
+      type: object
+      required: [headerName, token]
+      properties:
+        headerName: { type: string, example: X-XSRF-TOKEN }
+        token: { type: string }
+    AcceptedMessage:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, example: 'If the address can be used, an email has been sent.' }
+    PolicyVersions:
+      type: object
+      required: [termsVersion, privacyVersion]
+      properties:
+        termsVersion: { type: string, example: '2026-11-01' }
+        privacyVersion: { type: string, example: '2026-11-01' }
+    Money:
+      type: object
+      description: Integer minor units plus ISO 4217 code. Only INR is accepted in this slice.
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 4500000
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: INR
+    UserSummary:
+      type: object
+      required: [id, displayName]
+      properties:
+        id: { type: string, format: uuid }
+        displayName: { type: string }
+    # ---- Identity ----
+    Consents:
+      type: object
+      required: [termsVersion, privacyVersion]
+      properties:
+        termsVersion: { type: string, maxLength: 32 }
+        privacyVersion: { type: string, maxLength: 32 }
+    RegisterRequest:
+      type: object
+      required: [email, password, displayName, publicDisplayName, countryCode, roles, consents]
+      properties:
+        email: { type: string, format: email, maxLength: 254, example: asha.demo@kyro.local }
+        password: { type: string, format: password, minLength: 12, maxLength: 128 }
+        displayName: { type: string, minLength: 2, maxLength: 80, example: Asha Verma }
+        publicDisplayName: { type: string, minLength: 2, maxLength: 40, example: Asha V. }
+        countryCode: { type: string, pattern: '^[A-Z]{2}$', example: IN }
+        roles:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum: [RECIPIENT, DONOR]
+        consents: { $ref: '#/components/schemas/Consents' }
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, maxLength: 256 }
+    ResendVerificationRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, format: password, maxLength: 128 }
+    ProfileSummary:
+      type: object
+      required: [publicDisplayName]
+      properties:
+        publicDisplayName: { type: string }
+    CurrentUser:
+      type: object
+      required: [id, email, displayName, countryCode, roles, emailVerified, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        countryCode: { type: string, pattern: '^[A-Z]{2}$' }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/Role' }
+        emailVerified: { type: boolean }
+        recipientProfile: { $ref: '#/components/schemas/ProfileSummary' }
+        donorProfile: { $ref: '#/components/schemas/ProfileSummary' }
+        createdAt: { type: string, format: date-time }
+    UpdateProfileRequest:
+      type: object
+      properties:
+        displayName: { type: string, minLength: 2, maxLength: 80 }
+        recipientPublicDisplayName: { type: string, minLength: 2, maxLength: 40 }
+        donorPublicDisplayName: { type: string, minLength: 2, maxLength: 40 }
+    # ---- Education requests ----
+    EducationRequestCreate:
+      type: object
+      required: [title, expenseType, amount]
+      properties:
+        title: { type: string, minLength: 5, maxLength: 120, example: Semester 3 tuition fee }
+        expenseType: { $ref: '#/components/schemas/ExpenseType' }
+        amount: { $ref: '#/components/schemas/Money' }
+        story: { type: string, maxLength: 2000 }
+        institutionName: { type: string, maxLength: 200, example: Fictional Institute of Technology }
+        institutionCity: { type: string, maxLength: 100, example: Pune }
+        institutionCountry: { type: string, pattern: '^[A-Z]{2}$', default: IN }
+        courseName: { type: string, maxLength: 200, example: B.Tech Computer Science }
+        feeReference: { type: string, maxLength: 100, example: INV-2026-00123 }
+        dueDate: { type: string, format: date, example: '2027-01-15' }
+    EducationRequestUpdate:
+      type: object
+      required: [version]
+      properties:
+        title: { type: string, minLength: 5, maxLength: 120 }
+        expenseType: { $ref: '#/components/schemas/ExpenseType' }
+        amount: { $ref: '#/components/schemas/Money' }
+        story: { type: string, maxLength: 2000 }
+        institutionName: { type: string, maxLength: 200 }
+        institutionCity: { type: string, maxLength: 100 }
+        institutionCountry: { type: string, pattern: '^[A-Z]{2}$' }
+        courseName: { type: string, maxLength: 200 }
+        feeReference: { type: string, maxLength: 100 }
+        dueDate: { type: string, format: date }
+        version:
+          type: integer
+          format: int64
+          description: Current version, for optimistic locking.
+    StatusHistoryEntry:
+      type: object
+      required: [toStatus, changedAt]
+      properties:
+        fromStatus:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/RequestStatus'
+          nullable: true
+        toStatus: { $ref: '#/components/schemas/RequestStatus' }
+        changedAt: { type: string, format: date-time }
+        note:
+          type: string
+          nullable: true
+          description: Recipient-visible text.
+    EducationRequest:
+      type: object
+      required: [id, title, expenseType, amount, status, publicDisplayName, editable, submissionCount, documents, statusHistory, createdAt, updatedAt, version]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, minLength: 5, maxLength: 120 }
+        expenseType: { $ref: '#/components/schemas/ExpenseType' }
+        amount: { $ref: '#/components/schemas/Money' }
+        story: { type: string, maxLength: 2000, nullable: true }
+        institutionName: { type: string, maxLength: 200, nullable: true }
+        institutionCity: { type: string, maxLength: 100, nullable: true }
+        institutionCountry: { type: string, pattern: '^[A-Z]{2}$', nullable: true }
+        courseName: { type: string, maxLength: 200, nullable: true }
+        feeReference: { type: string, maxLength: 100, nullable: true }
+        dueDate: { type: string, format: date, nullable: true }
+        status: { $ref: '#/components/schemas/RequestStatus' }
+        publicDisplayName: { type: string, readOnly: true }
+        editable: { type: boolean }
+        submissionCount: { type: integer, format: int32 }
+        documents:
+          type: array
+          items: { $ref: '#/components/schemas/RequestDocument' }
+        statusHistory:
+          type: array
+          items: { $ref: '#/components/schemas/StatusHistoryEntry' }
+        reviewerFeedback:
+          type: string
+          nullable: true
+          description: Latest message from the reviewer to the recipient.
+        submittedAt: { type: string, format: date-time, nullable: true }
+        approvedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
+    EducationRequestSummary:
+      type: object
+      required: [id, title, status, amount, documentCount, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/RequestStatus' }
+        amount: { $ref: '#/components/schemas/Money' }
+        dueDate: { type: string, format: date, nullable: true }
+        documentCount: { type: integer, format: int32 }
+        updatedAt: { type: string, format: date-time }
+    EducationRequestSummaryList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/EducationRequestSummary' }
+    # ---- Documents ----
+    DocumentUploadRequest:
+      type: object
+      required: [documentType, fileName, contentType, sizeBytes]
+      properties:
+        documentType: { $ref: '#/components/schemas/DocumentType' }
+        fileName: { type: string, minLength: 1, maxLength: 200, example: tuition-invoice.pdf }
+        contentType: { $ref: '#/components/schemas/DocumentContentType' }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 10485760, example: 182400 }
+    RequestDocument:
+      type: object
+      description: Never contains a storage key or URL.
+      required: [id, documentType, originalFileName, contentType, sizeBytes, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        documentType: { $ref: '#/components/schemas/DocumentType' }
+        originalFileName: { type: string }
+        contentType: { $ref: '#/components/schemas/DocumentContentType' }
+        sizeBytes: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/DocumentStatus' }
+        createdAt: { type: string, format: date-time }
+        uploadedAt: { type: string, format: date-time, nullable: true }
+    RequestDocumentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RequestDocument' }
+    DocumentUploadAuthorization:
+      type: object
+      required: [document, uploadUrl, method, requiredHeaders, expiresAt]
+      properties:
+        document: { $ref: '#/components/schemas/RequestDocument' }
+        uploadUrl: { type: string, format: uri }
+        method: { type: string, enum: [PUT] }
+        requiredHeaders:
+          type: object
+          additionalProperties: { type: string }
+        expiresAt: { type: string, format: date-time }
+    # ---- Verification ----
+    VerificationCaseSummary:
+      type: object
+      required: [id, requestId, requestTitle, recipientPublicName, amount, status, submissionNumber, openedAt]
+      properties:
+        id: { type: string, format: uuid }
+        requestId: { type: string, format: uuid }
+        requestTitle: { type: string }
+        recipientPublicName: { type: string }
+        amount: { $ref: '#/components/schemas/Money' }
+        status: { $ref: '#/components/schemas/CaseStatus' }
+        submissionNumber: { type: integer, format: int32 }
+        assignedTo:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+        openedAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time, nullable: true }
+        outcome:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/CaseOutcome'
+          nullable: true
+    VerificationCasePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/VerificationCaseSummary' }
+        nextCursor: { type: string, nullable: true }
+    ReviewRecipient:
+      type: object
+      required: [id, displayName, email, emailVerified, memberSince]
+      properties:
+        id: { type: string, format: uuid }
+        displayName: { type: string }
+        email: { type: string, format: email }
+        emailVerified: { type: boolean }
+        memberSince: { type: string, format: date-time }
+    ReviewRequestView:
+      description: Full private request view for reviewers.
+      allOf:
+        - $ref: '#/components/schemas/EducationRequest'
+        - type: object
+          required: [recipient]
+          properties:
+            recipient: { $ref: '#/components/schemas/ReviewRecipient' }
+    DuplicateIndicator:
+      type: object
+      required: [kind, otherRequestId, otherRequestStatus, detail]
+      properties:
+        kind: { $ref: '#/components/schemas/DuplicateKind' }
+        otherRequestId: { type: string, format: uuid }
+        otherRequestStatus: { $ref: '#/components/schemas/RequestStatus' }
+        detail: { type: string }
+    VerificationDecisionView:
+      type: object
+      required: [id, decision, rationale, decidedBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        decision: { $ref: '#/components/schemas/Decision' }
+        rationale: { type: string, description: Internal only. }
+        messageToRecipient: { type: string, nullable: true }
+        decidedBy: { $ref: '#/components/schemas/UserSummary' }
+        createdAt: { type: string, format: date-time }
+    VerificationCaseDetail:
+      allOf:
+        - $ref: '#/components/schemas/VerificationCaseSummary'
+        - type: object
+          required: [request, duplicateIndicators, decisions, canDecide]
+          properties:
+            request: { $ref: '#/components/schemas/ReviewRequestView' }
+            duplicateIndicators:
+              type: array
+              items: { $ref: '#/components/schemas/DuplicateIndicator' }
+            decisions:
+              type: array
+              description: Decisions of all cases for this request, newest first.
+              items: { $ref: '#/components/schemas/VerificationDecisionView' }
+            canDecide:
+              type: boolean
+              description: Whether the caller may decide this case now.
+    DecisionInput:
+      type: object
+      required: [decision, rationale]
+      properties:
+        decision: { $ref: '#/components/schemas/Decision' }
+        rationale: { type: string, minLength: 10, maxLength: 2000, description: Internal only. }
+        messageToRecipient:
+          type: string
+          maxLength: 2000
+          description: Required when decision is REJECT or REQUEST_CHANGES (422 otherwise).
+    DocumentViewUrl:
+      type: object
+      required: [url, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    # ---- Audit ----
+    AuditEvent:
+      type: object
+      required: [id, occurredAt, action, entityType, details]
+      properties:
+        id: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        actor:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/UserSummary'
+          nullable: true
+        action: { type: string, example: VERIFICATION_DECIDED }
+        entityType: { type: string, example: VerificationCase }
+        entityId: { type: string, format: uuid, nullable: true }
+        correlationId: { type: string, nullable: true }
+        details:
+          type: object
+          additionalProperties: true
+    AuditEventPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AuditEvent' }
+        nextCursor: { type: string, nullable: true }
+    # ---- Discovery ----
+    FundingProgress:
+      type: object
+      description: Pledged and confirmed amounts are kept separate. Both are always 0 in this slice.
+      required: [target, pledgedMinor, confirmedMinor]
+      properties:
+        target: { $ref: '#/components/schemas/Money' }
+        pledgedMinor: { type: integer, format: int64, minimum: 0 }
+        confirmedMinor: { type: integer, format: int64, minimum: 0 }
+    RequestCard:
+      type: object
+      description: Privacy-safe card. Never contains feeReference, documents, email or recipient id.
+      required: [id, title, storyExcerpt, recipientPublicName, expenseType, amount, verifiedAt, funding]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        storyExcerpt: { type: string }
+        recipientPublicName: { type: string }
+        expenseType: { $ref: '#/components/schemas/ExpenseType' }
+        institutionName: { type: string, nullable: true }
+        institutionCity: { type: string, nullable: true }
+        institutionCountry: { type: string, nullable: true }
+        courseName: { type: string, nullable: true }
+        amount: { $ref: '#/components/schemas/Money' }
+        dueDate: { type: string, format: date, nullable: true }
+        verifiedAt: { type: string, format: date-time }
+        funding: { $ref: '#/components/schemas/FundingProgress' }
+    PublicRequestDetail:
+      allOf:
+        - $ref: '#/components/schemas/RequestCard'
+        - type: object
+          required: [story]
+          properties:
+            story: { type: string }
+            viewerAction:
+              type: string
+              allOf:
+                - $ref: '#/components/schemas/SwipeAction'
+              nullable: true
+              description: Null when anonymous or not yet swiped.
+    FeedPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/RequestCard' }
+        nextCursor: { type: string, nullable: true }
+    SwipeInput:
+      type: object
+      required: [action]
+      properties:
+        action: { $ref: '#/components/schemas/SwipeAction' }
+    SwipeResult:
+      type: object
+      required: [requestId, action, updatedAt]
+      properties:
+        requestId: { type: string, format: uuid }
+        action: { $ref: '#/components/schemas/SwipeAction' }
+        updatedAt: { type: string, format: date-time }
+    SavedItem:
+      type: object
+      required: [request, action, savedAt]
+      properties:
+        request: { $ref: '#/components/schemas/RequestCard' }
+        action:
+          type: string
+          enum: [SAVED, INTERESTED]
+        savedAt: { type: string, format: date-time }
+    SavedPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SavedItem' }
+        nextCursor: { type: string, nullable: true }
