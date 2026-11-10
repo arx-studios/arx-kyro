@@ -1,6 +1,7 @@
 package com.kyro.platform.identity.infrastructure;
 
 import com.kyro.platform.common.security.Role;
+import com.kyro.platform.identity.domain.ConsentRow;
 import com.kyro.platform.identity.domain.UserAccount;
 import com.kyro.platform.identity.domain.UserAccountRepository;
 import com.kyro.platform.identity.domain.UserStatus;
@@ -150,6 +151,72 @@ class JdbcUserAccountRepository implements UserAccountRepository {
                 """,
                 Timestamp.from(now),
                 Timestamp.from(now),
+                userId);
+    }
+
+    @Override
+    public void insertPasswordResetToken(UUID userId, String tokenHash, Instant expiresAt, String requestedIp) {
+        jdbc.update(
+                "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, requested_ip) VALUES (?, ?, ?, ?)",
+                userId,
+                tokenHash,
+                Timestamp.from(expiresAt),
+                truncate(requestedIp, 45));
+    }
+
+    @Override
+    public Optional<UUID> consumePasswordResetToken(String tokenHash, Instant now) {
+        return jdbc.query(
+                        """
+                        UPDATE password_reset_tokens SET consumed_at = ?
+                        WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?
+                        RETURNING user_id
+                        """,
+                        (rs, i) -> rs.getObject("user_id", UUID.class),
+                        Timestamp.from(now),
+                        tokenHash,
+                        Timestamp.from(now))
+                .stream()
+                .findFirst();
+    }
+
+    @Override
+    public void consumeAllPasswordResetTokens(UUID userId, Instant now) {
+        jdbc.update(
+                "UPDATE password_reset_tokens SET consumed_at = ? WHERE user_id = ? AND consumed_at IS NULL",
+                Timestamp.from(now),
+                userId);
+    }
+
+    @Override
+    public long updatePasswordHash(UUID userId, String passwordHash) {
+        Long v = jdbc.queryForObject(
+                """
+                UPDATE users SET password_hash = ?, credentials_version = credentials_version + 1,
+                       updated_at = now(), version = version + 1
+                WHERE id = ? RETURNING credentials_version
+                """,
+                Long.class,
+                passwordHash,
+                userId);
+        return v == null ? 0L : v;
+    }
+
+    @Override
+    public long credentialsVersion(UUID userId) {
+        Long v = jdbc.queryForObject("SELECT credentials_version FROM users WHERE id = ?", Long.class, userId);
+        return v == null ? 0L : v;
+    }
+
+    @Override
+    public List<ConsentRow> consentHistory(UUID userId) {
+        return jdbc.query(
+                "SELECT policy_type, policy_version, accepted_at FROM consent_records WHERE user_id = ?"
+                        + " ORDER BY accepted_at DESC, policy_type",
+                (rs, i) -> new ConsentRow(
+                        rs.getString("policy_type"),
+                        rs.getString("policy_version"),
+                        rs.getTimestamp("accepted_at").toInstant()),
                 userId);
     }
 

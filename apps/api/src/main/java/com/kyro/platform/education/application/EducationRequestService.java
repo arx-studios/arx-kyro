@@ -46,7 +46,17 @@ public class EducationRequestService {
             String feeReference,
             Long amountMinor,
             String currency,
-            LocalDate dueDate) {}
+            LocalDate dueDate,
+            java.util.Set<String> clearFields) {
+
+        public RequestChanges(
+                String title, String story, String expenseType, String institutionName, String institutionCity,
+                String institutionCountry, String courseName, String feeReference, Long amountMinor, String currency,
+                LocalDate dueDate) {
+            this(title, story, expenseType, institutionName, institutionCity, institutionCountry, courseName,
+                    feeReference, amountMinor, currency, dueDate, java.util.Set.of());
+        }
+    }
 
     private final EducationStore store;
     private final RequestAccess access;
@@ -125,24 +135,39 @@ public class EducationRequestService {
         if (c.amountMinor() != null || c.currency() != null) {
             validateMoney(amount, currency, errors);
         }
+        java.util.Set<String> clear = c.clearFields() == null ? java.util.Set.of() : c.clearFields();
+        Map<String, Object> given = new LinkedHashMap<>();
+        given.put("story", c.story());
+        given.put("institutionName", c.institutionName());
+        given.put("institutionCity", c.institutionCity());
+        given.put("courseName", c.courseName());
+        given.put("feeReference", c.feeReference());
+        given.put("dueDate", c.dueDate());
+        for (String field : clear) {
+            if (given.get(field) != null) {
+                errors.add(new FieldError(field, "cannot be both cleared and given a value"));
+            }
+        }
         throwIfAny(errors);
         RequestFields f = new RequestFields(
                 c.title() != null ? clean(c.title()) : r.title(),
-                c.story() != null ? clean(c.story()) : r.story(),
+                clear.contains("story") ? null : c.story() != null ? clean(c.story()) : r.story(),
                 c.expenseType() != null ? c.expenseType() : r.expenseType(),
-                c.institutionName() != null ? clean(c.institutionName()) : r.institutionName(),
-                c.institutionCity() != null ? clean(c.institutionCity()) : r.institutionCity(),
+                clear.contains("institutionName") ? null : c.institutionName() != null ? clean(c.institutionName()) : r.institutionName(),
+                clear.contains("institutionCity") ? null : c.institutionCity() != null ? clean(c.institutionCity()) : r.institutionCity(),
                 c.institutionCountry() != null ? c.institutionCountry() : r.institutionCountry(),
-                c.courseName() != null ? clean(c.courseName()) : r.courseName(),
-                c.feeReference() != null ? clean(c.feeReference()) : r.feeReference(),
+                clear.contains("courseName") ? null : c.courseName() != null ? clean(c.courseName()) : r.courseName(),
+                clear.contains("feeReference") ? null : c.feeReference() != null ? clean(c.feeReference()) : r.feeReference(),
                 amount,
                 currency,
-                c.dueDate() != null ? c.dueDate() : r.dueDate());
+                clear.contains("dueDate") ? null : c.dueDate() != null ? c.dueDate() : r.dueDate());
         if (!store.updateFields(requestId, expectedVersion, f)) {
             throw new ConflictException("STALE_VERSION", "The request was changed concurrently; reload and retry.");
         }
         audit.record(new AuditEntry(
-                AuditActions.REQUEST_UPDATED, "FUNDING_REQUEST", requestId, Map.of("changedFields", changedFields(r.fields(), f))));
+                AuditActions.REQUEST_UPDATED, "FUNDING_REQUEST", requestId, Map.of(
+                        "changedFields", changedFields(r.fields(), f),
+                        "clearedFields", clear.stream().sorted().toList())));
         return detail(requestId);
     }
 

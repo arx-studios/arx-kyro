@@ -66,7 +66,12 @@ class EducationRequestsController implements EducationRequestsApi {
                         b.getFeeReference(),
                         b.getAmount() == null ? null : b.getAmount().getAmountMinor(),
                         b.getAmount() == null ? null : b.getAmount().getCurrency(),
-                        b.getDueDate()))));
+                        b.getDueDate(),
+                        b.getClearFields() == null
+                                ? java.util.Set.of()
+                                : b.getClearFields().stream()
+                                        .map(f -> f.getValue())
+                                        .collect(java.util.stream.Collectors.toSet())))));
     }
 
     @Override

@@ -2,6 +2,7 @@ package com.kyro.platform.identity.domain;
 
 import com.kyro.platform.common.security.Role;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -30,6 +31,22 @@ public interface UserAccountRepository {
     Optional<UUID> consumeVerificationToken(String tokenHash, Instant now);
 
     void markEmailVerified(UUID userId, Instant now);
+
+    void insertPasswordResetToken(UUID userId, String tokenHash, Instant expiresAt, String requestedIp);
+
+    /** Atomically consumes a valid (unexpired, unconsumed) reset token; returns the user id, or empty if none. */
+    Optional<UUID> consumePasswordResetToken(String tokenHash, Instant now);
+
+    /** Marks every outstanding reset token of the user consumed. */
+    void consumeAllPasswordResetTokens(UUID userId, Instant now);
+
+    /** Sets the password hash and increments {@code credentials_version}; returns the new version. */
+    long updatePasswordHash(UUID userId, String passwordHash);
+
+    long credentialsVersion(UUID userId);
+
+    /** Consent history, newest first. */
+    List<ConsentRow> consentHistory(UUID userId);
 
     void updateDisplayName(UUID userId, String displayName);
 
