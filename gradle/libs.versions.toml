@@ -1,6 +1,6 @@
 [versions]
 spring-boot = "4.1.2"
-openapi-generator = "7.14.0"
+openapi-generator = "7.27.0"
 awssdk = "2.57.12"
 archunit = "1.5.1"
 
