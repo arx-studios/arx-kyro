@@ -8,11 +8,13 @@
   "scripts": {
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
+    "test": "pnpm -r --if-present --filter=!@kyro/e2e test",
+    "test:e2e": "pnpm --filter @kyro/e2e test",
+    "smoke": "node scripts/smoke/slice.mjs",
     "build": "pnpm -r --if-present build",
     "gen:client": "pnpm --filter @kyro/api-client generate",
     "spec:lint": "pnpm --filter @kyro/api-spec lint",
-    "infra:up": "docker compose up -d --wait",
+    "infra:up": "docker compose up -d --wait postgres minio mailpit && docker compose up minio-init",
     "infra:down": "docker compose down"
   }
 }

@@ -1,11 +1,10 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter } from 'next/font/google';
+import '@fontsource-variable/inter';
 import type { ReactNode } from 'react';
 import { AppShell } from '@/components/AppShell';
 import { Providers } from '@/components/Providers';
 import './globals.css';
 
-const inter = Inter({ subsets: ['latin'], display: 'swap', variable: '--font-inter' });
 
 export const metadata: Metadata = {
   title: { default: 'KYRO - Verified needs. Meaningful impact.', template: '%s | KYRO' },
@@ -22,7 +21,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en">
       <body>
         <Providers>
           <AppShell>{children}</AppShell>
