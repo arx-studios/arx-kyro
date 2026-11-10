@@ -23,7 +23,7 @@ jobs:
       contents: read
       id-token: write # needed to request a GitHub OIDC token once an AWS role exists
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Enable once LATER-2 provisions a GitHub OIDC role. No long-lived AWS keys are ever stored.
       # - uses: aws-actions/configure-aws-credentials@v4
       #   with:
