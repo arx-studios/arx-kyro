@@ -1,0 +1,77 @@
+spring:
+  application:
+    name: kyro-api
+  datasource:
+    url: ${KYRO_DB_URL:jdbc:postgresql://localhost:5433/kyro}
+    username: ${KYRO_DB_USER:kyro}
+    password: ${KYRO_DB_PASSWORD:kyro_local}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  mail:
+    host: ${KYRO_MAIL_HOST:localhost}
+    port: ${KYRO_MAIL_PORT:1025}
+  jackson:
+    default-property-inclusion: always
+
+server:
+  port: 8080
+  servlet:
+    session:
+      timeout: 8h
+      cookie:
+        name: KYRO_SESSION
+        http-only: true
+        same-site: lax
+        secure: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+  health:
+    mail:
+      enabled: false
+
+kyro:
+  web-base-url: ${KYRO_WEB_BASE_URL:http://localhost:3000}
+  mail-from: ${KYRO_MAIL_FROM:no-reply@kyro.local}
+  policy:
+    terms-version: ${KYRO_POLICY_TERMS_VERSION:2026-11-01}
+    privacy-version: ${KYRO_POLICY_PRIVACY_VERSION:2026-11-01}
+  auth:
+    verification-token-ttl: 24h
+    login-rate-per-minute: 10
+    register-rate-per-minute: 5
+    resend-rate-per-minute: 3
+  storage:
+    endpoint: ${KYRO_S3_ENDPOINT:http://localhost:9000}
+    public-endpoint: ${KYRO_S3_PUBLIC_ENDPOINT:http://localhost:9000}
+    region: ${KYRO_S3_REGION:us-east-1}
+    access-key: ${KYRO_S3_ACCESS_KEY:kyro-minio}
+    secret-key: ${KYRO_S3_SECRET_KEY:kyro-minio-secret}
+    documents-bucket: ${KYRO_S3_DOCUMENTS_BUCKET:kyro-documents-local}
+  documents:
+    max-size-bytes: 10485760
+    max-per-request: 10
+    allowed-content-types:
+      - application/pdf
+      - image/jpeg
+      - image/png
+    upload-url-ttl: 10m
+    view-url-ttl: 5m
+  discovery:
+    default-page-size: 20
+    max-page-size: 50
+    story-excerpt-length: 240
+  seed:
+    enabled: ${KYRO_SEED_ENABLED:false}
+    password: ${KYRO_SEED_PASSWORD:KyroLocal!2026}

@@ -1,0 +1,13 @@
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+
+kyro:
+  seed:
+    enabled: ${KYRO_SEED_ENABLED:true}
+
+logging:
+  level:
+    com.kyro.platform: INFO
