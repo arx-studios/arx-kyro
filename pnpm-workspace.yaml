@@ -3,9 +3,9 @@ packages:
   - packages/*
   - e2e
 
-# pnpm >=10 blocks dependency build scripts unless allowed here.
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
-  - '@tailwindcss/oxide'
-  - unrs-resolver
+# pnpm 12 blocks dependency build scripts unless allowed here (true = allow).
+allowBuilds:
+  esbuild: true
+  sharp: true
+  '@tailwindcss/oxide': true
+  unrs-resolver: true
