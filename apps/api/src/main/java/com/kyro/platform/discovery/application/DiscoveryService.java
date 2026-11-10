@@ -36,7 +36,12 @@ public class DiscoveryService {
 
     private static final String CARD_COLUMNS =
             "v.id, v.title, v.story, v.expense_type, v.institution_name, v.institution_city, v.institution_country,"
-                    + " v.course_name, v.amount_minor, v.currency, v.due_date, v.approved_at, v.recipient_public_name";
+                    + " v.course_name, v.amount_minor, v.currency, v.due_date, v.approved_at, v.recipient_public_name,"
+                    + " COALESCE(fp.pledged_minor, 0) AS pledged_minor";
+
+    /** funding_request_progress has a row only when a pledge exists, so it is always LEFT JOINed. */
+    private static final String PROGRESS_JOIN =
+            " LEFT JOIN funding_request_progress fp ON fp.request_id = v.id AND fp.currency = v.currency";
 
     private final JdbcTemplate jdbc;
     private final Clock clock;
@@ -55,7 +60,7 @@ public class DiscoveryService {
         int size = pageSize(limit);
         Optional<KyroPrincipal> me = actor.current();
         StringBuilder sql = new StringBuilder(
-                "SELECT " + CARD_COLUMNS + " FROM discovery_public_requests v WHERE (v.due_date IS NULL OR v.due_date >= ?)");
+                "SELECT " + CARD_COLUMNS + " FROM discovery_public_requests v" + PROGRESS_JOIN + " WHERE (v.due_date IS NULL OR v.due_date >= ?)");
         List<Object> args = new ArrayList<>();
         args.add(java.sql.Date.valueOf(LocalDate.now(clock)));
         if (me.isPresent()) {
@@ -81,7 +86,7 @@ public class DiscoveryService {
 
     @Transactional(readOnly = true)
     public PublicRequestDetail detail(UUID requestId) {
-        Row r = jdbc.query("SELECT " + CARD_COLUMNS + " FROM discovery_public_requests v WHERE v.id = ?", (rs, i) -> row(rs), requestId)
+        Row r = jdbc.query("SELECT " + CARD_COLUMNS + " FROM discovery_public_requests v" + PROGRESS_JOIN + " WHERE v.id = ?", (rs, i) -> row(rs), requestId)
                 .stream()
                 .findFirst()
                 .orElseThrow(NotFoundException::new);
@@ -148,7 +153,7 @@ public class DiscoveryService {
         KyroPrincipal me = actor.require();
         int size = pageSize(limit);
         StringBuilder sql = new StringBuilder("SELECT s.id AS swipe_id, s.action, s.updated_at, " + CARD_COLUMNS
-                + " FROM swipes s JOIN discovery_public_requests v ON v.id = s.request_id"
+                + " FROM swipes s JOIN discovery_public_requests v ON v.id = s.request_id" + PROGRESS_JOIN
                 + " WHERE s.donor_user_id = ? AND s.action IN ('SAVED', 'INTERESTED')");
         List<Object> args = new ArrayList<>();
         args.add(me.userId());
@@ -206,7 +211,8 @@ public class DiscoveryService {
             String currency,
             LocalDate dueDate,
             Instant approvedAt,
-            String recipientName) {}
+            String recipientName,
+            long pledgedMinor) {}
 
     private static Row row(ResultSet rs) throws SQLException {
         java.sql.Date due = rs.getDate("due_date");
@@ -223,7 +229,8 @@ public class DiscoveryService {
                 rs.getString("currency"),
                 due == null ? null : due.toLocalDate(),
                 rs.getTimestamp("approved_at").toInstant(),
-                rs.getString("recipient_public_name"));
+                rs.getString("recipient_public_name"),
+                rs.getLong("pledged_minor"));
     }
 
     private RequestCard card(Row r) {
@@ -239,7 +246,7 @@ public class DiscoveryService {
                         ExpenseType.fromValue(r.expenseType),
                         amount,
                         r.approvedAt.atOffset(ZoneOffset.UTC),
-                        new FundingProgress(amount, 0L, 0L))
+                        new FundingProgress(amount, r.pledgedMinor, 0L))
                 .institutionName(r.institutionName)
                 .institutionCity(r.institutionCity)
                 .institutionCountry(r.institutionCountry)
