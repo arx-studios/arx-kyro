@@ -1,0 +1,16 @@
+# Extends the default ruleset; allowlists documented sandbox-only local credentials.
+title = "KYRO gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local sandbox credentials (fictional, never used outside docker-compose)"
+regexes = [
+  '''kyro_local''',
+  '''kyro-minio-secret''',
+  '''KyroLocal!2026''',
+]
+paths = [
+  '''(^|/)pnpm-lock\.yaml$''',
+]
