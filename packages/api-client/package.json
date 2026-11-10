@@ -1,0 +1,25 @@
+{
+  "name": "@kyro/api-client",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generated TypeScript types and fetch client for the KYRO API (source: @kyro/api-spec).",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "generate": "openapi-typescript ../api-spec/openapi.yaml -o src/schema.d.ts && node scripts/gen-aliases.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "openapi-fetch": "^0.14.0"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.9.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

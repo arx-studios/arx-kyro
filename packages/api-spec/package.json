@@ -1,0 +1,12 @@
+{
+  "name": "@kyro/api-spec",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KYRO OpenAPI 3.0.3 contract (frozen after FND-2; see docs/progress/PLAN.md section 7).",
+  "scripts": {
+    "lint": "redocly lint openapi.yaml"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^2.0.0"
+  }
+}
