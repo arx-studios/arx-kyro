@@ -1008,3 +1008,850 @@ Also:
 | Hibernate `validate` fails on column types | varchar everywhere; jsonb accessed only via JdbcTemplate |
 | Windows line endings break `minio-init.sh` and `gradlew` | `.gitattributes` with `eol=lf` |
 
+
+---
+
+# Phase 5 Plan (planner-opus-2)
+
+Goal: move KYRO from a working first slice to something ready for a **private beta**. That means closing the blueprint §6 P0 gaps that the slice left open, plus the P1 items that are safe with no live money. Nothing in this phase integrates a payment provider, takes a payment or holds money. The hard constraints in PLAN §0 and the header still apply unchanged.
+
+This section is written against the code on `main` at commit `5974375`, not against the original plan. The builder workflow in PLAN §0 still applies: one branch or worktree per task, coordination docs edited live in `D:\kyro\docs\progress\`, and owned paths kept disjoint.
+
+---
+
+## P5.0 What the code looks like now (facts this plan relies on)
+
+These facts come from reading the repo. Builders should rely on them.
+
+1. **Contract codegen breaks on non-additive changes.** `apps/api/build.gradle.kts` generates with `interfaceOnly=true`, `useTags=true` and `skipDefaultInterface=true`, and models get required-argument constructors (for example `new FundingProgress(amount, 0L, 0L)` in `DiscoveryService`, and `new CurrentUser(...)` in `identity/api/UserMapper`). This gives two rules:
+   - **New operations go only under new tags.** That produces new Java interfaces with no implementor, which still compiles. An operation added to an existing tag would break the controller that already implements that interface.
+   - **New properties on existing schemas must be optional.** A new required property changes the generated constructor and breaks compilation.
+2. **`KyroProperties` is a positional record** and is built positionally in `EducationDevSeederIT`. Do not add fields to it. New configuration uses new `@ConfigurationProperties` records with new prefixes, each owned by its feature module. If `PlatformApplication` does not use `@ConfigurationPropertiesScan`, each module registers its record with `@EnableConfigurationProperties` in its own config class.
+3. **`RateLimiter` only covers three auth POST paths** (a hard-coded `switch`). It keys on `getRemoteAddr()`. Behind an AWS load balancer that address is the load balancer, so every client would share one bucket. This must be fixed before staging (SEC-2 and INF-2).
+4. **`consent_records` already exists** (V1) and gets two rows at registration. What SEC-006 still needs is: reading consent history, re-accepting after a policy version change, and append-only protection.
+5. **No code path updates or deletes** `verification_decisions`, `funding_request_status_history` or `consent_records`. I checked main and test sources. So a database trigger that forbids UPDATE and DELETE on them is safe to add now.
+6. **The discovery detail UI computes remaining = target − pledged − confirmed** (D-011). This contradicts blueprint §7: a pledge must never count as money raised. WEB-3 fixes it.
+7. **Suspended users keep their sessions.** Login rejects SUSPENDED users, but nothing re-checks an existing session.
+8. **Route-level 403s are not audited.** `common` must not depend on any module, which is enforced by `ModuleBoundaryTest.commonDoesNotDependOnModules`.
+9. **`S3ObjectStorage` always uses an endpoint override plus static keys.** On ECS it should use the task IAM role and the default AWS endpoint. This is a staging blocker and is assigned to INF-2.
+10. **Sessions and rate-limit counters are in memory.** Staging must therefore run **one API task** until Spring Session JDBC lands (deferred, see P5.12).
+
+---
+
+## P5.1 Scope decisions
+
+**In Phase 5:**
+
+| Item | Blueprint | Package |
+|---|---|---|
+| Non-binding pledges, funding summary, pledge cap with a row-lock guard | PAY-001 (P0), §7, Screen 4 | CON-2, FUND-1, WEB-3 |
+| Reservations and overfunding design (documented only, no table yet) | PAY-005, §7, §12 | P5.4 (design) |
+| User reports, admin report queue, moderation holds | OPS-002 (P0), Screen 4 | CON-2, OPS-1, WEB-3, ADM-2 |
+| Admin operational dashboard (counts) | OPS-001 (P0) | OPS-1, ADM-2 |
+| Admin MFA (TOTP) required for `/admin/**` | ID-003 (P0) | SEC-2, ADM-2 |
+| Session revocation: password change/reset, suspension | ID-002 (P0) | SEC-2, ACCT-1 |
+| Rate limiting for discovery and other sensitive endpoints | SEC-004 (P0), D-013 | SEC-2 |
+| Trusting forwarded client IP behind a load balancer | SEC-004 | SEC-2, INF-2 |
+| Password reset and change password | ID-002 (P0, account recovery) | ACCT-1, WEB-4 |
+| Consent history and re-acceptance | SEC-006 (P0, consent part) | ACCT-1, WEB-4 |
+| Email to the recipient on APPROVED / CHANGES_REQUESTED / REJECTED | OPS-004 (P1, safe) | ACCT-1 |
+| PATCH can clear optional fields | D-010, D-015 | ACCT-1, WEB-4 |
+| Append-only `verification_decisions`, status history and consents at DB level | D-014, TRUST-004 | CON-2 |
+| Audit of route-level 403s on admin paths | TRUST-004, SEC-001 | SEC-2 |
+| E2E: reject, request-changes → resubmit, withdraw, pledge, report, MFA, reset | §19 | E2E-2 |
+| Terraform AWS staging (validate and offline plan only) | PLAT-003, §18 | INF-2 |
+| Staging profile: structured logs, forwarded headers, IAM-role S3 | PLAT-005 (logs part) | INF-2 |
+
+**Dropped or deferred, with reasons:**
+
+| Item | Reason |
+|---|---|
+| Payment provider, checkout, webhooks, ledger, reconciliation, refunds (PAY-002…007) | No live money until the §16 compliance gates are passed. They get their own phase. |
+| `funding_reservations` and `campaign_contributions` tables | They have meaning only once payments exist. The design is in P5.4 and they will be created in the payments migration. Empty tables would be dead schema that nothing tests. |
+| Disputes (OPS-003) | These are payment disputes, so there is nothing to dispute yet. Complaints about requests go through user reports. |
+| Appeals (TRUST-007, P1) | Needs a separation-of-duties policy for who reviews appeals. The correction loop plus reports covers the beta. Phase 6. |
+| Malware scanning and EXIF stripping (SEC-003 / EDU-003) | Local ClamAV is heavy and needs network for signatures. INF-2 enables the GuardDuty S3 malware protection plan in Terraform. App-side gating (`scan_status` must be clean before a view URL is issued) is Phase 6, the first item to do before real uploads. |
+| `apps/worker`, transactional outbox, SQS | Notification emails are sent best-effort after commit. A crash can lose an email; the state change itself is always durable. Revisit when payments need reliable async work. |
+| Spring Session JDBC and Redis rate limits | Staging runs one API task (INF-2 enforces `desired_count = 1`). Phase 6, before any scale-out. |
+| Account deletion and data export (ID-006, rest of SEC-006) | Needs a legally reviewed retention schedule first. The V9 append-only triggers mean deletion will be anonymisation, not `DELETE`. |
+| Staff role management API (granting VERIFIER/ADMIN) | Few staff during the beta. A runbook covers it. Phase 6. |
+| Server-side consent enforcement (blocking mutations until re-accepted) | Policy versions only change with a deploy. WEB-4 gates the UI and the API exposes the status. Server enforcement comes in Phase 6, before the first policy change. |
+| Phone verification, OIDC, MFA for donors and recipients | Need external providers or are not P0. |
+| Filters and ranking (MATCH-004/005), progress updates (EDU-008), impact dashboard | P1/P2. Not needed to validate the beta. |
+| Metrics and tracing (OTel, Prometheus) | Needs Gradle dependencies and a collector. Structured logs land now in the staging profile. Phase 6. |
+| Pledge lapsing on the due date (`LAPSED`) | Needs a scheduler. The status value is reserved in the CHECK constraint but not used. |
+
+---
+
+## P5.2 Phases and parallel groups
+
+| Group | Packages | Rule |
+|---|---|---|
+| **5a** | **CON-2** ∥ INF-2 | CON-2 is the gate for every other package except INF-2. It is small, should merge fast, and needs no feature logic. INF-2 is independent. |
+| **5b** | FUND-1 ∥ OPS-1 ∥ SEC-2 ∥ ACCT-1 ∥ WEB-3 ∥ WEB-4 ∥ ADM-2 | All start once CON-2 is merged. The web and admin packages build against the regenerated client and mocked tests. Each one's **live check** waits for its API counterpart to merge (listed under each package). |
+| **5c** | E2E-2 | After all of 5b. Flips admin MFA enforcement on and extends smoke and Playwright. |
+
+**Phase 5 exit criterion:**
+- `./gradlew build`, `pnpm lint`, `pnpm typecheck` and `pnpm test` are green.
+- `pnpm smoke` and `pnpm test:e2e` are green with `KYRO_ADMIN_MFA_ENFORCED=true`.
+- The CI `ci.yml`, `e2e.yml` and `terraform.yml` workflows are green on GitHub (`origin`: `arx-studios/arx-kyro`).
+- No package has applied any Terraform.
+
+---
+
+## P5.3 Shared-file ownership in Phase 5
+
+| Shared file | Owner in Phase 5 | Others |
+|---|---|---|
+| `packages/api-spec/openapi.yaml`, `packages/api-client/**` | **CON-2** (all additions in P5.5, client regenerated in the same commit) | After CON-2 merges, any further change needs a DECISIONS entry, must stay additive under §P5.0 rule 1, regenerates the client in the same commit, and is announced in LOG before merging. |
+| `db/migration/V6`–`V9` | **CON-2** | Feature packages add no migrations. If one is unavoidable, take the **next free number at merge time** (V10+) after rebasing. Never leave a gap, never reserve a number and never merge out of order. Flyway runs with `outOfOrder=false`. |
+| `scripts/db/verify.sql` | CON-2 | – |
+| `application.yml`, `application-local.yml` | **CON-2** (adds every Phase 5 key in P5.6) | E2E-2 may change exactly one default (`KYRO_ADMIN_MFA_ENFORCED` from `false` to `true`). Anyone else who needs a key writes a LOG note and the orchestrator applies it after merge. |
+| `application-staging.yml` (new) | INF-2 | – |
+| `common/security/SecurityConfig.java` | CON-2 adds route matchers first, then **SEC-2** owns it | – |
+| `common/security/**` (rest) | SEC-2 (CON-2 creates `SessionAttributes.java` only) | – |
+| `audit/application/AuditActions.java` | CON-2 (adds every constant in P5.8) | – |
+| `education/application/port/**` (frozen) | CON-2 (adds `EducationRequestStatusChanged.java`) | – |
+| `ModuleBoundaryTest.java` | CON-2 | – |
+| `.env.example`, `.github/gitleaks.toml` | CON-2 | – |
+| `apps/api/src/test/java/com/kyro/platform/support/**`, `apps/api/src/test/resources/**` | SEC-2 | Others may only use the support classes. |
+| `pnpm-lock.yaml` | anyone | Same rule as before: take main's version and run `pnpm install` again. |
+
+---
+
+## P5.4 Funding design: pledges now, reservations later
+
+**Three concepts (blueprint §7), each with its own storage:**
+- **Interest** is stored in `swipes` (exists).
+- **Pledge** is stored in `pledges` (new, non-binding).
+- **Payment** will be stored in `payments` and `campaign_contributions` (a later phase).
+
+`confirmedMinor` is computed only from confirmed contributions, so it is **0 for the whole of Phase 5**. `pledgedMinor` is the sum of ACTIVE pledges. **Pledges are never added to confirmed amounts, to "raised", or to the progress bar.** The outstanding need is `remainingMinor = target − confirmed`. Pledges do not reduce it.
+
+**Campaign row as the lock anchor.**
+- Each APPROVED request gets at most one `campaigns` row (mode GROUP; DIRECT is reserved). It is created lazily on the first pledge with `INSERT … ON CONFLICT (request_id) DO NOTHING`, taking `target_minor` and `currency` from `discovery_public_requests`.
+- An APPROVED request can never be edited (PLAN §8), so the target snapshot stays valid.
+- The funding module locks its own campaign row. It never locks rows owned by the education module.
+
+**Phase 5 pledge guard, one transaction (FUND-1):**
+1. Read the request from `discovery_public_requests`. Not found (not approved, withdrawn or on hold) → 404. `due_date < current_date` → 422 `PLEDGE_NOT_ALLOWED`. Caller is the recipient → 422 `PLEDGE_NOT_ALLOWED`.
+2. Validate: `amount.currency` must equal the request currency, otherwise 422 `UNSUPPORTED_CURRENCY`. `amountMinor ≥ kyro.funding.min-pledge-minor`, otherwise 422 `VALIDATION_FAILED`. `acknowledgeNonBinding == true`, otherwise 422 `VALIDATION_FAILED` on that field.
+3. Upsert the campaign, then `SELECT … FROM campaigns WHERE request_id=? FOR UPDATE`.
+4. Check idempotency: look up `(donor_user_id, idempotency_key)`. If found with the same request and amount, return **200** with the existing pledge. If found with a different body, return 422 `IDEMPOTENCY_KEY_REUSED`.
+5. If the donor already has an ACTIVE pledge on this request → 409 `ACTIVE_PLEDGE_EXISTS`. Partial unique index as a backstop.
+6. Compute `pledgeable = target − confirmed(0) − sum(active pledges)`. If `amount > pledgeable` → 409 `PLEDGE_EXCEEDS_REMAINING`; the detail states the pledgeable amount.
+7. Insert the pledge (ACTIVE), audit `PLEDGE_CREATED`, return **201** with a `Location` header.
+8. If the insert hits a unique violation on the idempotency key (concurrent retry), re-read and return 200.
+
+This pledge cap is the same algorithm that payments will later run on reservations. The concurrency test for it is the pledge version of mandatory scenario 1 in blueprint §19.
+
+**Withdrawal.** FUND-1 listens synchronously to the existing `EducationRequestWithdrawn` event inside the education transaction. It cancels every ACTIVE pledge on the request with `cancel_reason = REQUEST_WITHDRAWN` and audits `PLEDGE_CANCELLED` once per pledge.
+
+**Moderation hold.** A held request drops out of the view, so new pledges get 404. Existing pledges stay ACTIVE. In "My pledges" the `request` field is null, shown as "temporarily unavailable".
+
+**Reservations: design only, nothing is built in Phase 5.** These are created in the payments migration (V10 or later).
+- Table `funding_reservations`:
+  - `id`, `campaign_id` FK, `donor_user_id` FK, `pledge_id` FK nullable, `amount_minor > 0`, `currency`
+  - `status` CHECK (HELD, CONSUMED, RELEASED, EXPIRED)
+  - `idempotency_key` (UNIQUE with the donor), `expires_at` (now + 15 min), `created_at`, `updated_at`
+  - Partial index `(campaign_id) WHERE status = 'HELD'`
+- **Reserve** (before provider checkout): lock the campaign `FOR UPDATE`, then compute `available = target − confirmed − sum(HELD and not expired)`. If `amount > available` → 409 `FUNDING_EXCEEDS_REMAINING`. Otherwise insert HELD. Checkout may only start with a HELD reservation, and the amount is fixed server-side (Screen 5: client-side amount changes are rejected).
+- **Provider success webhook** (signature verified, unique event id): in one transaction, mark the reservation CONSUMED, insert the contribution and post the ledger entries. Failure or expiry → RELEASED or EXPIRED. A worker sweeper expires stale HELD rows.
+- **Late success after expiry:** accept only if the amount is still available. Otherwise flag for ops and refund automatically. The money is never kept and never over-counted.
+- **Belt and braces:** a deferred constraint trigger asserts `sum(confirmed) ≤ target` per campaign.
+- **Pledges and payments:** pledges do not hold capacity against payments, because payments take priority. When confirmed reaches the target, remaining ACTIVE pledges move to a future status `FULFILLED_BY_OTHERS`, added together with payments.
+
+---
+
+## P5.5 Contract additions (CON-2 owns all of them; all additive)
+
+Base path `/api/v1`. Security conventions follow D-002: mutating operations need `sessionCookie` + `csrfHeader`; public mutating ones need only `csrfHeader`. Every 4xx/5xx response references the existing `components/responses/Problem*`. That brings the total to **51 operations**.
+
+**New components:**
+- **Parameters:** `PledgeId`, `ReportId`, `UserId` (path, uuid). `IdempotencyKey` (header `Idempotency-Key`, required, string 8–64, pattern `^[A-Za-z0-9-]+$`).
+- **Enums:**
+  - `PledgeStatus`: ACTIVE, CANCELLED, LAPSED (LAPSED reserved, not used)
+  - `PledgeCancelReason`: DONOR_CANCELLED, REQUEST_WITHDRAWN
+  - `ReportReason`: SUSPECTED_FRAUD, ALTERED_DOCUMENT, DUPLICATE_REQUEST, INAPPROPRIATE_CONTENT, PRIVACY_CONCERN, OTHER
+  - `ReportStatus`: OPEN, IN_REVIEW, RESOLVED
+  - `ReportResolution`: DISMISSED, ACTION_TAKEN
+  - `ReportQueue`: OPEN, MINE, RESOLVED, ALL
+  - `PolicyType`: TERMS, PRIVACY
+  - `ClearableRequestField`: story, institutionName, institutionCity, courseName, feeReference, dueDate
+
+### Tag `Funding` → `FundingApi`, implemented by FUND-1
+
+| Method | Path | operationId | Auth | Success |
+|---|---|---|---|---|
+| POST | /funding/requests/{requestId}/pledges | createPledge | DONOR | 201 Pledge + Location `/api/v1/funding/pledges/{id}`; 200 Pledge on idempotent replay |
+| GET | /funding/pledges/{pledgeId} | getPledge | DONOR, owner (others 404 + ACCESS_DENIED audit) | 200 Pledge |
+| POST | /funding/pledges/{pledgeId}/cancel | cancelPledge | DONOR, owner | 200 Pledge (409 `INVALID_STATE_TRANSITION` if not ACTIVE) |
+| GET | /me/funding/pledges | listMyPledges | DONOR | 200 PledgePage (`cursor`, `limit`) |
+| GET | /funding/requests/{requestId}/summary | getFundingSummary | public (adds `viewerPledge` for a donor session) | 200 FundingSummary; 404 if not in the public view |
+
+Schemas:
+- `PledgeCreate {amount: Money, acknowledgeNonBinding: boolean}`. Both required. The server requires `true`.
+- `Pledge {id, requestId, amount: Money, status: PledgeStatus, cancelReason: PledgeCancelReason|null, nonBinding: boolean (always true), createdAt, cancelledAt|null}`
+- `PublicRequestRef {id, title, recipientPublicName}`
+- `PledgeListItem {pledge: Pledge, request: PublicRequestRef|null}`. `request` is null when the request is no longer public.
+- `PledgePage {items[], nextCursor}`
+- `FundingSummary {requestId, target: Money, confirmedMinor, pledgedMinor, remainingMinor, pledgeableMinor, activePledgeCount, pledgesAreNonBinding: boolean (always true), viewerPledge: Pledge|null}`
+  - All `*Minor` fields are int64 ≥ 0.
+  - Description: `remainingMinor = target − confirmed`; pledges never reduce it. Donor identities are never exposed.
+
+Existing `FundingProgress`: update the **description only**: "pledgedMinor = sum of ACTIVE non-binding pledges; confirmedMinor = confirmed payments (0 until payments exist); pledges are never money raised." No shape change.
+
+### Tag `Reports` → `ReportsApi`, implemented by OPS-1
+
+| Method | Path | operationId | Auth | Success |
+|---|---|---|---|---|
+| POST | /reports | createReport | authenticated | 202 ReportReceipt |
+
+- `ReportCreate {requestId: uuid, reason: ReportReason, details?: string ≤2000}`. `details` is required (non-blank) when reason is OTHER; the server returns 422.
+- `ReportReceipt {id, status, createdAt}`.
+- Errors:
+  - 404: the request is not in the public view
+  - 422 `VALIDATION_FAILED`: reporting your own request
+  - 409 `REPORT_ALREADY_OPEN`: the same reporter already has an open report on the same request
+
+### Tag `Operations` → `OperationsApi`, implemented by OPS-1
+
+Paths are under `/admin/` and need VERIFIER or ADMIN unless marked otherwise.
+
+| Method | Path | operationId | Auth | Success |
+|---|---|---|---|---|
+| GET | /admin/reports | listReports | VERIFIER/ADMIN | 200 ReportPage (`queue`: ReportQueue, default OPEN = OPEN+IN_REVIEW; `cursor`; `limit`) |
+| GET | /admin/reports/{reportId} | getReport | VERIFIER/ADMIN | 200 ReportDetail |
+| POST | /admin/reports/{reportId}/assign | assignReport | VERIFIER/ADMIN | 200 ReportDetail |
+| POST | /admin/reports/{reportId}/resolve | resolveReport | assignee | 200 ReportDetail |
+| POST | /admin/requests/{requestId}/hold/release | releaseRequestHold | **ADMIN only** | 204 |
+| GET | /admin/dashboard | getAdminDashboard | VERIFIER/ADMIN | 200 AdminDashboard |
+
+Schemas:
+- `ReportSummary {id, requestId, requestTitle, reason, status, reporter: UserSummary, assignedTo: UserSummary|null, createdAt, resolvedAt|null, resolution: ReportResolution|null, requestOnHold: boolean}`
+- `ReportPage {items[], nextCursor}`
+- `RequestHold {requestId, reportId|null, reason, placedBy: UserSummary, placedAt}`
+- `ReportDetail`: the ReportSummary fields (allOf) plus `{details|null, resolutionNote|null, resolvedBy: UserSummary|null, requestStatus: RequestStatus, latestCaseId: uuid|null, hold: RequestHold|null, otherReports: ReportSummary[], canResolve: boolean}`
+- `ReportResolutionInput {resolution, note: string 10–2000, holdRequest: boolean, default false}`. `holdRequest=true` is allowed only with ACTION_TAKEN; otherwise 422.
+- `AdminDashboard {unassignedCases, myOpenCases, openReports, unassignedReports, activeHolds, generatedAt}`
+
+### Tag `Account` → `AccountApi`, implemented by ACCT-1
+
+| Method | Path | operationId | Auth | Success |
+|---|---|---|---|---|
+| POST | /auth/password-reset | requestPasswordReset | public (csrf) | 202 AcceptedMessage, always |
+| POST | /auth/password-reset/confirm | confirmPasswordReset | public (csrf) | 204 |
+| POST | /me/password | changePassword | authenticated | 204 |
+
+Schemas: `PasswordResetRequest {email}`, `PasswordResetConfirm {token, newPassword 12–128}`, `ChangePasswordRequest {currentPassword 1–128, newPassword 12–128}`.
+
+### Tag `Consents` → `ConsentsApi`, implemented by ACCT-1
+
+| Method | Path | operationId | Auth | Success |
+|---|---|---|---|---|
+| GET | /me/consents | getMyConsents | authenticated | 200 ConsentStatus |
+| POST | /me/consents | acceptCurrentPolicies | authenticated | 200 ConsentStatus (body: existing `Consents`) |
+
+Schemas:
+- `ConsentRecord {policyType: PolicyType, policyVersion, acceptedAt}`
+- `ConsentStatus {current: PolicyVersions, acceptedTermsVersion|null, acceptedPrivacyVersion|null, reacceptRequired: boolean, history: ConsentRecord[]}` (history newest first)
+
+### Tag `Mfa` → `MfaApi`, implemented by SEC-2
+
+| Method | Path | operationId | Auth | Success |
+|---|---|---|---|---|
+| POST | /auth/mfa/totp/enrollment | startTotpEnrollment | VERIFIER/ADMIN | 200 TotpEnrollment |
+| POST | /auth/mfa/totp/enrollment/confirm | confirmTotpEnrollment | VERIFIER/ADMIN | 200 MfaRecoveryCodes |
+| POST | /auth/mfa/verify | verifyMfa | VERIFIER/ADMIN | 200 CurrentUser |
+| POST | /admin/users/{userId}/mfa/reset | resetUserMfa | **ADMIN only**, not on self | 204 |
+
+Schemas:
+- `TotpEnrollment {secret (base32), otpauthUri, issuer, accountName}`
+- `TotpCodeInput {code: ^[0-9]{6}$}`
+- `MfaVerifyRequest {code?: ^[0-9]{6}$, recoveryCode?: ^[A-Z0-9]{5}-[A-Z0-9]{5}$}`. Exactly one is required; otherwise 422.
+- `MfaRecoveryCodes {codes: string[] (10 items)}`
+- `MfaStatus {required, enrolled, verified}`
+
+### Optional additions to existing schemas (no constructor change)
+
+- `CurrentUser.mfa?: MfaStatus` (SEC-2 populates it). Present when the user has VERIFIER or ADMIN.
+- `EducationRequestUpdate.clearFields?: ClearableRequestField[]` (uniqueItems, maxItems 6; ACCT-1 implements it). A field named in `clearFields` is set to NULL. A field that is both cleared and given a value → 422 `VALIDATION_FAILED`. Title, expenseType, amount and institutionCountry cannot be cleared.
+
+### New problem codes (add to PLAN §6)
+
+| Status | Codes |
+|---|---|
+| 401 | `SESSION_REVOKED` (optional detail; plain `UNAUTHENTICATED` is also acceptable after revocation) |
+| 403 | `MFA_REQUIRED`, `MFA_ENROLLMENT_REQUIRED` |
+| 409 | `ACTIVE_PLEDGE_EXISTS`, `PLEDGE_EXCEEDS_REMAINING`, `REPORT_ALREADY_OPEN`, `REPORT_ALREADY_ASSIGNED`, `REPORT_NOT_ASSIGNED_TO_YOU`, `MFA_ALREADY_ENROLLED` |
+| 422 | `PLEDGE_NOT_ALLOWED`, `IDEMPOTENCY_KEY_REUSED`, `MFA_CODE_INVALID`, `CURRENT_PASSWORD_INCORRECT` (`TOKEN_INVALID` is reused for reset tokens) |
+
+A missing `Idempotency-Key` header gives 400 `MALFORMED_REQUEST`. FUND-1 confirms that `GlobalExceptionHandler` maps `MissingRequestHeaderException` that way. If it does not, the fix goes in a LOG note to SEC-2, which owns common.
+
+---
+
+## P5.6 Migrations (CON-2 writes all of them)
+
+D-003's numbering (V7 payments, V8 ledger, V9 operations) is **superseded**, because Flyway cannot leave gaps for later. Payments and ledger move to V10 and later. CON-2 records this in DECISIONS.
+
+**V6__create_funding.sql**
+- `campaigns`:
+  - `id`, `request_id` FK→funding_requests UNIQUE
+  - `mode varchar(16)` DEFAULT 'GROUP', CHECK IN (GROUP, DIRECT)
+  - `target_minor bigint` CHECK > 0, `currency varchar(3)` CHECK `^[A-Z]{3}$`
+  - `status varchar(16)` DEFAULT 'OPEN', CHECK IN (OPEN, CLOSED)
+  - `created_at`, `closed_at`, `version`
+- `pledges`:
+  - `id`, `campaign_id` FK, `request_id` FK→funding_requests, `donor_user_id` FK→users
+  - `amount_minor bigint` CHECK > 0, `currency varchar(3)` CHECK
+  - `status varchar(16)` DEFAULT 'ACTIVE', CHECK IN (ACTIVE, CANCELLED, LAPSED)
+  - `cancel_reason varchar(32)` CHECK NULL or IN (DONOR_CANCELLED, REQUEST_WITHDRAWN)
+  - CHECK `(status = 'CANCELLED') = (cancel_reason IS NOT NULL)`
+  - `idempotency_key varchar(64)` NOT NULL, `created_at`, `cancelled_at`, `updated_at`, `version`
+  - UNIQUE `(donor_user_id, idempotency_key)`
+  - partial UNIQUE `(donor_user_id, request_id) WHERE status = 'ACTIVE'`
+  - indexes `(request_id, status)`, `(donor_user_id, created_at DESC, id DESC)`, `(campaign_id)`
+- VIEW `funding_request_progress`: `request_id`, `currency`, `pledged_minor` (COALESCE of the sum of ACTIVE pledges), `active_pledge_count`. One row per request that has at least one pledge row; consumers LEFT JOIN it.
+
+**V7__create_operations.sql**
+- `user_reports`:
+  - `id`, `reporter_user_id` FK→users
+  - `target_type varchar(16)` DEFAULT 'REQUEST', CHECK IN (REQUEST)
+  - `request_id` FK→funding_requests
+  - `reason varchar(32)` CHECK (ReportReason), `details varchar(2000)`
+  - `status varchar(16)` DEFAULT 'OPEN', CHECK (ReportStatus)
+  - `assigned_to` FK nullable, `assigned_at`
+  - `resolution varchar(32)` CHECK NULL or (ReportResolution), `resolution_note varchar(2000)`, `resolved_by` FK nullable, `resolved_at`
+  - `created_at`, `version`
+  - CHECK `(status = 'RESOLVED') = (resolution IS NOT NULL)`
+  - partial UNIQUE `(reporter_user_id, request_id) WHERE status <> 'RESOLVED'`
+  - indexes `(status, created_at, id)`, `(request_id)`, `(assigned_to)`
+- `request_moderation_holds`:
+  - `id`, `request_id` FK, `report_id` FK nullable, `reason varchar(500)` NOT NULL
+  - `placed_by` FK, `placed_at`, `released_by` FK nullable, `released_at`
+  - partial UNIQUE `(request_id) WHERE released_at IS NULL`
+- `CREATE OR REPLACE VIEW discovery_public_requests`: **same column list in the same order** as V4, plus `AND NOT EXISTS (SELECT 1 FROM request_moderation_holds h WHERE h.request_id = r.id AND h.released_at IS NULL)`.
+
+**V8__identity_security.sql**
+- `ALTER TABLE users ADD COLUMN credentials_version bigint NOT NULL DEFAULT 0`
+- `password_reset_tokens`: `id`, `user_id` FK ON DELETE CASCADE, `token_hash varchar(64)` UNIQUE, `expires_at`, `consumed_at`, `requested_ip varchar(45)`, `created_at`; index `(user_id)`
+- `user_mfa_credentials`:
+  - `user_id` PK FK
+  - `method varchar(16)` DEFAULT 'TOTP', CHECK IN (TOTP)
+  - `secret_ciphertext varchar(512)` NOT NULL, `key_id varchar(32)` NOT NULL
+  - `confirmed_at` (NULL means enrollment is pending), `last_used_step bigint`
+  - `created_at`, `updated_at`, `version`
+- `user_mfa_recovery_codes`: `id`, `user_id` FK, `code_hash varchar(64)` NOT NULL, `used_at`, `created_at`; index `(user_id)`
+
+**V9__append_only_history.sql**
+- Function `forbid_update_delete()` raises `'% is append-only (% not allowed)', TG_TABLE_NAME, TG_OP`.
+- `BEFORE UPDATE OR DELETE` triggers on `verification_decisions`, `funding_request_status_history` and `consent_records`.
+- A comment notes that future account deletion must anonymise, not delete, because the `users` ON DELETE CASCADE into `consent_records` will now raise.
+
+`scripts/db/verify.sql` additions (each a DO-block expected failure, in the existing style):
+- negative or zero pledge amount
+- a second ACTIVE pledge for the same donor and request
+- a duplicate `(donor, idempotency_key)`
+- a CANCELLED pledge without a reason
+- a second open report by the same reporter on the same request
+- a second active hold on the same request
+- a held APPROVED request is absent from `discovery_public_requests`, and the view still has no fee or document column
+- `funding_request_progress` ignores CANCELLED pledges
+- UPDATE and DELETE on `verification_decisions`, `funding_request_status_history` and `consent_records` all raise
+
+---
+
+## P5.7 Configuration keys (CON-2 adds them; feature packages bind their own records)
+
+`application.yml` (add; keep the existing `kyro.auth.*-rate-per-minute` keys as they are):
+
+```yaml
+kyro:
+  funding:            # FundingProperties (FUND-1, funding module)
+    min-pledge-minor: 100
+    currencies: [INR]
+  password-reset:     # PasswordResetProperties (ACCT-1)
+    token-ttl: 30m
+  notifications:      # NotificationProperties (ACCT-1)
+    email-enabled: ${KYRO_NOTIFICATIONS_EMAIL_ENABLED:true}
+  mfa:                # MfaProperties (SEC-2)
+    admin-enforced: ${KYRO_ADMIN_MFA_ENFORCED:false}   # E2E-2 flips the default to true
+    issuer: "KYRO Sandbox"
+    encryption-key: ${KYRO_MFA_ENCRYPTION_KEY:}         # base64 32 bytes; required outside local/test
+    recovery-code-count: 10
+    allowed-skew-steps: 1
+  sessions:           # SessionProperties (SEC-2)
+    revalidate-interval: ${KYRO_SESSION_REVALIDATE_INTERVAL:60s}
+  rate-limits:        # RateLimitProperties (SEC-2, common.security)
+    enabled: ${KYRO_RATE_LIMITS_ENABLED:true}
+    rules:            # key: IP | USER (USER falls back to IP when anonymous); window = 1 minute
+      - { id: discovery-read,       method: GET,  pattern: /api/v1/discovery/feed/**,                               per-minute: ${KYRO_RATE_DISCOVERY_READ:120}, key: IP }
+      - { id: funding-summary,      method: GET,  pattern: /api/v1/funding/requests/*/summary,                      per-minute: ${KYRO_RATE_FUNDING_SUMMARY:120}, key: IP }
+      - { id: swipe,                method: POST, pattern: /api/v1/discovery/requests/*/swipes,                     per-minute: ${KYRO_RATE_SWIPE:60}, key: USER }
+      - { id: pledge-create,        method: POST, pattern: /api/v1/funding/requests/*/pledges,                      per-minute: ${KYRO_RATE_PLEDGE:10}, key: USER }
+      - { id: pledge-cancel,        method: POST, pattern: /api/v1/funding/pledges/*/cancel,                        per-minute: ${KYRO_RATE_PLEDGE_CANCEL:10}, key: USER }
+      - { id: report-create,        method: POST, pattern: /api/v1/reports,                                         per-minute: ${KYRO_RATE_REPORT:5}, key: USER }
+      - { id: password-reset,       method: POST, pattern: /api/v1/auth/password-reset,                             per-minute: ${KYRO_RATE_PASSWORD_RESET:3}, key: IP }
+      - { id: password-reset-confirm, method: POST, pattern: /api/v1/auth/password-reset/confirm,                   per-minute: ${KYRO_RATE_PASSWORD_RESET_CONFIRM:10}, key: IP }
+      - { id: password-change,      method: POST, pattern: /api/v1/me/password,                                     per-minute: ${KYRO_RATE_PASSWORD_CHANGE:5}, key: USER }
+      - { id: mfa-verify,           method: POST, pattern: /api/v1/auth/mfa/verify,                                 per-minute: ${KYRO_RATE_MFA_VERIFY:5}, key: USER }
+      - { id: mfa-enroll-confirm,   method: POST, pattern: /api/v1/auth/mfa/totp/enrollment/confirm,                per-minute: ${KYRO_RATE_MFA_ENROLL:5}, key: USER }
+      - { id: upload-url,           method: POST, pattern: /api/v1/education/requests/*/documents/upload-url,       per-minute: ${KYRO_RATE_UPLOAD_URL:20}, key: USER }
+      - { id: document-view-url,    method: POST, pattern: /api/v1/admin/verification/cases/*/documents/*/view-url, per-minute: ${KYRO_RATE_VIEW_URL:30}, key: USER }
+server:
+  forward-headers-strategy: ${KYRO_FORWARD_HEADERS_STRATEGY:none}   # staging: native (ALB X-Forwarded-For)
+```
+
+`application-local.yml` adds `kyro.mfa.encryption-key: <dev-only base64 key generated by CON-2>`. `.env.example` documents every new variable. `.github/gitleaks.toml` allowlists by path: `application-local.yml`, `apps/api/src/test/resources/application-test.yml`, and the dev TOTP secret literal `KYROLOCALDEVTOTPAAAAAAAAAAAAAAAA` (base32, local seed only, used by SEC-2, smoke and E2E).
+
+---
+
+## P5.8 Audit actions (CON-2 adds these constants)
+
+- Funding: `PLEDGE_CREATED`, `PLEDGE_CANCELLED`
+- Operations: `REPORT_CREATED`, `REPORT_ASSIGNED`, `REPORT_RESOLVED`, `REQUEST_HOLD_PLACED`, `REQUEST_HOLD_RELEASED`
+- Account: `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET_COMPLETED`, `PASSWORD_CHANGED`, `CONSENT_ACCEPTED`
+- MFA and session: `MFA_ENROLLMENT_STARTED`, `MFA_ENROLLED`, `MFA_VERIFIED`, `MFA_FAILED`, `MFA_RECOVERY_CODE_USED`, `MFA_RESET`, `SESSION_REVOKED`
+
+Entity types: `PLEDGE`, `USER_REPORT`, `FUNDING_REQUEST` (holds), `USER`. Details never contain secrets, tokens, codes or passwords.
+
+---
+
+## P5.9 Work packages
+
+### CON-2: Phase 5 contracts, migrations, config and route rules (group 5a; gate)
+
+**Owns:**
+- `packages/api-spec/`, `packages/api-client/`
+- `apps/api/src/main/resources/db/migration/V6__create_funding.sql`, `V7__create_operations.sql`, `V8__identity_security.sql`, `V9__append_only_history.sql`
+- `scripts/db/verify.sql`
+- `apps/api/src/main/resources/application.yml`, `application-local.yml`
+- `apps/api/src/main/java/com/kyro/platform/common/security/SecurityConfig.java` (route matchers only), `common/security/SessionAttributes.java` (new)
+- `apps/api/src/main/java/com/kyro/platform/audit/application/AuditActions.java`
+- `apps/api/src/main/java/com/kyro/platform/education/application/port/EducationRequestStatusChanged.java` (new)
+- `apps/api/src/test/java/com/kyro/platform/ModuleBoundaryTest.java`
+- `.env.example`, `.github/gitleaks.toml`
+
+**Build:**
+1. Everything in P5.5 (spec), P5.6 (migrations and verify.sql), P5.7 (yml keys, `.env.example`, gitleaks) and P5.8 (audit constants). Use fictional INR examples. Add `Location` headers. Mark the new ADMIN-only operations in their descriptions.
+2. `pnpm gen:client` in the same commit (`schema.d.ts` and `types.ts` aliases).
+3. `SessionAttributes` (final class, string constants): `CREDENTIALS_VERSION = "KYRO_CREDENTIALS_VERSION"`, `MFA_VERIFIED_AT = "KYRO_MFA_VERIFIED_AT"`, `LAST_REVALIDATED_AT = "KYRO_LAST_REVALIDATED_AT"`.
+4. Port record, with a `// FROZEN CONTRACT` header: `public record EducationRequestStatusChanged(UUID requestId, UUID recipientUserId, String title, String fromStatus, String toStatus, Instant occurredAt) {}`. CON-2 only adds the record; ACCT-1 publishes it.
+5. `SecurityConfig` matchers. Specific rules go **before** the existing `/api/v1/admin/**` and `anyRequest` rules:
+   - permitAll: `POST /api/v1/auth/password-reset`, `POST /api/v1/auth/password-reset/confirm`, `GET /api/v1/funding/requests/*/summary`
+   - `hasRole(ADMIN)`: `/api/v1/admin/requests/*/hold/release`, `/api/v1/admin/users/*/mfa/reset`
+   - `hasRole(DONOR)`: `POST /api/v1/funding/requests/*/pledges`, `/api/v1/funding/pledges/**`, `/api/v1/me/funding/**`
+   - `hasAnyRole(VERIFIER, ADMIN)`: `/api/v1/auth/mfa/**`
+   - `/reports`, `/me/consents` and `/me/password` fall through to `authenticated`
+6. `ModuleBoundaryTest`: add `funding`, `operations` and `notification` to `MODULES` and to `devSeedDependsOnlyOnCommon`. `PUBLIC_APPLICATION` is unchanged; no new module exposes its application package.
+7. DECISIONS: **D-017** covers the Phase 5 contract (operation list, the new-tag and optional-field rule from P5.0, error codes) and the migration renumbering that supersedes D-003.
+
+**Acceptance:**
+- Redocly reports 0 errors and 0 warnings.
+- Exactly 51 operations, with the operationIds and tags above.
+- The client has no drift.
+- `./gradlew build` is green: the Testcontainers database applies V1–V9, existing tests still pass, ArchUnit passes, and the new interfaces compile without implementations.
+- verify.sql passes.
+- Web and admin `typecheck` still pass (optional fields only).
+- Existing `pnpm smoke` and `pnpm test:e2e` still pass against a running stack.
+
+**Verify:**
+```bash
+pnpm install && pnpm spec:lint && pnpm gen:client && git diff --exit-code packages/api-client
+pnpm lint && pnpm typecheck && pnpm test
+./gradlew build
+pnpm infra:up
+docker compose --profile tools run --rm flyway migrate && docker compose --profile tools run --rm flyway validate && docker compose --profile tools run --rm flyway info
+docker compose exec -T postgres psql -U kyro -d kyro -v ON_ERROR_STOP=1 -f - < scripts/db/verify.sql
+./gradlew :apps:api:bootRun   # then, with web+admin dev servers: pnpm smoke && pnpm test:e2e
+```
+
+### FUND-1: Funding module (non-binding pledges) plus discovery progress (5b)
+
+**Owns:** `apps/api/src/{main,test}/java/com/kyro/platform/funding/**` and `apps/api/src/{main,test}/java/com/kyro/platform/discovery/**`.
+
+**Build:**
+- `FundingController implements FundingApi`.
+- `FundingService` and `PledgeService` follow P5.4 exactly. Use JdbcTemplate. Read the request from the `discovery_public_requests` view and never import education code.
+- `FundingProperties` (`kyro.funding`).
+- `FundingEventListener`: an `@EventListener` on `EducationRequestWithdrawn` that cancels ACTIVE pledges with REQUEST_WITHDRAWN and audits, in the same transaction.
+- Keyset cursor for `listMyPledges`: `(created_at, id)` DESC.
+- **Object-level access:** a non-owner gets 404 plus an `ACCESS_DENIED` audit row. Write the audit in `REQUIRES_NEW`, the same pattern as D-015.
+- `getFundingSummary`: anonymous gets `viewerPledge = null`; a donor gets their own ACTIVE pledge or null. `pledgeableMinor = max(0, target − confirmed − pledged)`. `confirmedMinor` is the constant 0, behind a single method `confirmedMinor(requestId)` with a TODO for payments.
+- **Discovery:** feed, detail and saved queries `LEFT JOIN funding_request_progress` and fill `pledgedMinor`. `confirmedMinor` stays 0.
+- Responses: `Cache-Control: no-store` on pledge endpoints.
+- DECISIONS entry for anything not covered here.
+
+**Acceptance (integration tests, `IntegrationTestBase` plus `DbFixtures`):**
+- **Create and replay:** create → 201 with Location, and an audit row. Replay with the same key and body → 200 with the same id. Same key with a different amount → 422 `IDEMPOTENCY_KEY_REUSED`. Missing header → 400.
+- **Rejections:**
+  - a second ACTIVE pledge → 409 `ACTIVE_PLEDGE_EXISTS`
+  - over the pledgeable amount → 409 `PLEDGE_EXCEEDS_REMAINING`
+  - own request → 422 `PLEDGE_NOT_ALLOWED`
+  - past-due request → 422 `PLEDGE_NOT_ALLOWED`
+  - non-INR → 422 `UNSUPPORTED_CURRENCY`
+  - `acknowledgeNonBinding=false` → 422
+  - request not APPROVED or held (insert an active hold row via JDBC) → 404
+- **Roles:** RECIPIENT-only → 403; anonymous POST → 401.
+- **Concurrency:** two donors run concurrently (CountDownLatch, 2 threads), each pledging the full pledgeable amount. Exactly one 201 and one 409. The sum of active pledges never exceeds the target.
+- **Cancel:** owner → CANCELLED and audit. A second cancel → 409. Another donor → 404 with ACCESS_DENIED.
+- **Withdrawal:** withdrawing an APPROVED request through the real education endpoint cancels all of its ACTIVE pledges with REQUEST_WITHDRAWN.
+- **Pledges never count as money:** after a pledge, the feed card has `pledgedMinor = X` and `confirmedMinor = 0`, and the summary's `remainingMinor` equals the target. Assert this explicitly.
+- **Privacy:** summary and feed JSON contain no donor id, email or idempotency key (raw-key scan as in DiscoveryIT).
+- Existing DiscoveryIT stays green.
+
+**Verify:** `./gradlew :apps:api:test --tests 'com.kyro.platform.funding.*'`, `./gradlew :apps:api:test --tests 'com.kyro.platform.discovery.*'`, then `./gradlew build`. Manual curl against `bootRun` as `donor.demo@kyro.local` on a seeded request.
+
+### OPS-1: User reports, moderation holds, admin report queue, dashboard (5b)
+
+**Owns:** `apps/api/src/{main,test}/java/com/kyro/platform/operations/**`.
+
+**Build:**
+- `ReportsController implements ReportsApi` and `OperationsController implements OperationsApi`.
+- Use JdbcTemplate. Read `discovery_public_requests` to check that a request is reportable. Read `funding_requests` (title, status, recipient id) and `verification_cases` (latest case id, counts) through read-only SQL. Record this in DECISIONS as a **reporting read exception**, the same idea as discovery reading a view: no writes, no Java imports.
+- Use `UserDirectory` for display names.
+- **Report state machine:** OPEN → IN_REVIEW (assign) → RESOLVED (resolve, assignee only). Use conditional UPDATEs with status and assignee in the WHERE, as API-3 does (D-014).
+- **Guards:**
+  - claim held by someone else → 409 `REPORT_ALREADY_ASSIGNED`
+  - resolve by anyone other than the assignee → 409 `REPORT_NOT_ASSIGNED_TO_YOU`
+  - any action on a RESOLVED report → 409 `INVALID_STATE_TRANSITION`
+  - staff acting on a report about their own request, or a report they filed → 403 `SELF_REVIEW_FORBIDDEN` plus `ACCESS_DENIED` audit (`noRollbackFor` pattern from D-014)
+- **Resolve with `holdRequest=true`:** insert `request_moderation_holds`, idempotent if a hold is already active, and audit `REQUEST_HOLD_PLACED`. The request disappears from the feed, detail, saved list and pledge creation through the V7 view.
+- `releaseRequestHold` (ADMIN): sets `released_*` and audits. No active hold → 404.
+- **Queues:** OPEN and MINE oldest first; RESOLVED and ALL newest first. Keyset cursor; bad cursor → 400.
+- Dashboard: COUNT queries.
+- **Never shown to the recipient:** the reporter's identity and any report text.
+
+**Acceptance (integration tests):**
+- A donor reports a public request → 202 and audit `REPORT_CREATED`. Same reporter again → 409. A different reporter → 202.
+- OTHER without details → 422. Reporting your own request → 422. A non-public request → 404. Anonymous → 401.
+- The 6th report in a minute → 429. This assertion only applies after SEC-2 merges; until then mark it `@Disabled("needs SEC-2")` and remove the annotation when rebasing after SEC-2.
+- A verifier claims and resolves with ACTION_TAKEN and a hold. The request is gone from `GET /discovery/feed` and `/feed/{id}` (404). ADMIN releases → it is back. A VERIFIER calling release → 403.
+- DISMISSED combined with `holdRequest` → 422. A short note → 422. Self-review guard → 403 plus an audit row.
+- RECIPIENT or DONOR calling `/admin/reports` → 403.
+- Dashboard counts match the fixtures.
+- Paging returns no duplicates across pages.
+
+**Verify:** `./gradlew :apps:api:test --tests 'com.kyro.platform.operations.*'`, then `./gradlew build`.
+
+### SEC-2: Admin MFA, session revocation, rate limiting, forwarded IP, admin-denial audit (5b)
+
+**Owns:**
+- `apps/api/src/main/java/com/kyro/platform/common/security/**` (`SecurityConfig` after CON-2, `RateLimiter`, `RateLimitFilter`, new filters and properties)
+- `identity/api/AuthController.java`, `identity/api/MeController.java`, `identity/api/UserMapper.java`, `identity/api/MfaController.java` (new)
+- `identity/application/mfa/**`, `identity/application/session/**`, `identity/infrastructure/mfa/**`, `identity/infrastructure/session/**` (all new)
+- `audit/infrastructure/AuditSecurityEventSink.java` (new)
+- `devseed/**`
+- Tests: `apps/api/src/test/java/com/kyro/platform/support/**`, `apps/api/src/test/java/com/kyro/platform/common/security/**`, `apps/api/src/test/java/com/kyro/platform/identity/mfa/**`, `.../identity/session/**`, `apps/api/src/test/resources/**`
+
+**Build:**
+- **Rate limiting:**
+  - `RateLimitProperties` binds the `kyro.rate-limits` rules. The existing three auth limits become built-in rules that read the existing `kyro.auth.*` keys, so `KYRO_AUTH_*_RATE_PER_MINUTE` keeps working.
+  - Match with Spring `PathPatternParser`. The bucket key is `ruleId|clientKey`. USER resolves to the principal's user id (the `SecurityContext` is already loaded at the filter's position before `CsrfFilter`) or falls back to the IP.
+  - On limit: 429 `RATE_LIMITED` with `Retry-After` set to the seconds left in the window.
+  - `enabled=false` disables only the non-auth rules.
+- **Forwarded IP:** with `server.forward-headers-strategy=native`, Tomcat's RemoteIpValve gives the real client IP to `getRemoteAddr()`, which the rate limiter and audit use. Add an IT that sends `X-Forwarded-For` from a trusted proxy address with the strategy set, and one without it.
+- **Session revalidation** (common defines the interface, identity implements it):
+  - `common.security.SessionValidator` interface: `boolean stillValid(UUID userId, long credentialsVersionAtLogin)`. Identity implements it with a JDBC read of `users.status` and `credentials_version`.
+  - `SessionGuardFilter` runs after the security context is loaded. At most once per `kyro.sessions.revalidate-interval` per session (timestamp kept in `LAST_REVALIDATED_AT`), it checks the user. If the user is SUSPENDED or the version changed, it invalidates the session, clears the context and audits `SESSION_REVOKED` through the identity implementation. Protected endpoints then return 401.
+  - Login (`AuthController`) stores `CREDENTIALS_VERSION` in the session.
+- **MFA (TOTP, RFC 6238):** SHA-1, 6 digits, 30-second step, ±`allowed-skew-steps`, using only JDK crypto.
+  - **Replay protection:** reject a code whose step ≤ `last_used_step`.
+  - **Secret storage:** AES-256-GCM with `kyro.mfa.encryption-key`, `key_id` "v1". Startup fails if the key is blank and the profile is neither `local` nor `test`.
+  - **Recovery codes:** 10 codes of the form `XXXXX-XXXXX`, stored as SHA-256 hashes, single use. They are returned once at confirmation.
+  - **Enrollment:** start replaces any unconfirmed secret; a confirmed one → 409 `MFA_ALREADY_ENROLLED`. Confirm checks the code, sets `confirmed_at`, marks the session MFA-verified (`MFA_VERIFIED_AT`) and rotates the session id.
+  - **Verify:** succeeds with a code or a recovery code, rotates the session id, returns CurrentUser. A wrong code → 422 `MFA_CODE_INVALID` plus `MFA_FAILED` audit.
+  - `resetUserMfa`: ADMIN only, not on self (403 `FORBIDDEN`). Deletes the credential and recovery codes, bumps `credentials_version` so the target's sessions die, and audits `MFA_RESET`.
+  - **Enforcement:** when `kyro.mfa.admin-enforced=true`, a filter rejects `/api/v1/admin/**` for VERIFIER or ADMIN sessions that lack `MFA_VERIFIED_AT`. Not enrolled → 403 `MFA_ENROLLMENT_REQUIRED`; enrolled → 403 `MFA_REQUIRED`. The `/auth/mfa/**` endpoints are not affected.
+  - `UserMapper` fills `CurrentUser.mfa` (required = staff role and enforced; enrolled; verified).
+- **Admin denial audit:**
+  - `common.security.SecurityEventSink` interface; `audit/infrastructure/AuditSecurityEventSink` implements it.
+  - The access-denied handler reports 403s on `/api/v1/admin/**` and MFA denials as `ACCESS_DENIED {resource, reason: ROLE_MISSING | MFA_REQUIRED}`.
+  - 401s are not audited (too noisy).
+- **Dev seed (local only):** `admin@` and `verifier@` get a confirmed TOTP credential with the base32 secret `KYROLOCALDEVTOTPAAAAAAAAAAAAAAAA`, encrypted with the local key. Document it in `docs/runbooks` through a LOG note (E2E-2 owns runbooks).
+- **Test support:**
+  - `TestUsers.createActiveUser(...)` sessions for VERIFIER or ADMIN get `MFA_VERIFIED_AT` and `CREDENTIALS_VERSION` by default.
+  - Add `createActiveUserWithoutMfa(Role...)`.
+  - `application-test.yml` sets a test encryption key, `kyro.mfa.admin-enforced=true` and `kyro.sessions.revalidate-interval=0s`, so every IT runs with enforcement. Existing Verification and Audit ITs must stay green through the default session helper.
+- DECISIONS entry.
+
+**Acceptance (tests):**
+- **Rate limits:** the 121st feed GET from one IP → 429 with `Retry-After`. Swipe limit per user: two users from the same IP are independent. Existing `AuthFlowIT` 429 test still passes.
+- **MFA flow:**
+  - enroll → confirm with a computed TOTP gives 10 codes
+  - `/admin/verification/cases` → 200 after verify, 403 `MFA_REQUIRED` before, 403 `MFA_ENROLLMENT_REQUIRED` when not enrolled
+  - the same code reused → 422
+  - a recovery code works once
+  - ADMIN reset of another user works and kills their session (401 next call); reset on self → 403
+  - a DONOR calling `/auth/mfa/verify` → 403
+- **Sessions:**
+  - setting `users.status = 'SUSPENDED'` → the next request is 401
+  - bumping `credentials_version` → 401
+  - the revalidation interval is honoured (unit test with `Clock`)
+- **Denial audit:** a DONOR hitting `/admin/**` writes an `ACCESS_DENIED` audit row with reason ROLE_MISSING.
+- `ModuleBoundaryTest` passes, including `commonDoesNotDependOnModules`.
+- With enforcement off (the yml default), `pnpm smoke` and `pnpm test:e2e` still pass unchanged.
+
+**Verify:** `./gradlew :apps:api:test --tests 'com.kyro.platform.common.security.*'`, `./gradlew :apps:api:test --tests 'com.kyro.platform.identity.*'`, then `./gradlew build`. Manual check: `bootRun`, then the cookie-jar curl flow from API-1 for `verifier@kyro.local` with `KYRO_ADMIN_MFA_ENFORCED=true`, computing the TOTP from the dev secret.
+
+### ACCT-1: Account recovery, consents, recipient notifications, education follow-ups (5b)
+
+**Owns:**
+- `apps/api/src/main/java/com/kyro/platform/identity/**` **except** SEC-2's files: `api/AuthController.java`, `api/MeController.java`, `api/UserMapper.java`, `api/MfaController.java`, `application/mfa/**`, `application/session/**`, `infrastructure/mfa/**`, `infrastructure/session/**`
+- `notification/**` (main + test)
+- `education/**` except `application/port/**` (main + test)
+- Tests: `apps/api/src/test/java/com/kyro/platform/identity/account/**`, `.../identity/consent/**` (new); the existing `AuthFlowIT` may only be touched if a shared helper needs it
+
+**Build:**
+- **Password reset:**
+  - `AccountController implements AccountApi`.
+  - Requesting a reset always returns 202. For an ACTIVE user it creates a token (32 random bytes, base64url, SHA-256 stored, TTL `kyro.password-reset.token-ttl`) and mails `${KYRO_WEB_BASE_URL}/reset-password?token=…`. In profile `local` the link is also logged with the `DEV-ONLY` prefix. Unknown emails and non-ACTIVE users get no mail. Audit `PASSWORD_RESET_REQUESTED` only for real users.
+  - Confirm: the token must be valid and unused, otherwise 422 `TOKEN_INVALID`. Then set the new hash, increment `credentials_version`, consume all of the user's outstanding tokens, audit `PASSWORD_RESET_COMPLETED`, and send a "your password was changed" mail.
+- **Change password:**
+  - Check the current password; wrong → 422 `CURRENT_PASSWORD_INCORRECT` plus `LOGIN_FAILED`-style audit details.
+  - Set the new hash and increment `credentials_version`.
+  - **Keep the caller's session alive:** set `SessionAttributes.CREDENTIALS_VERSION` on the current session to the new value and change the session id. Every other session of that user dies at its next revalidation (SEC-2).
+  - Audit `PASSWORD_CHANGED`.
+- **Consents:** `ConsentsController implements ConsentsApi`. Read history from `consent_records`. `reacceptRequired` is true when the latest accepted TERMS or PRIVACY version differs from `kyro.policy.*`. Accepting requires the current versions (422 `CONSENT_VERSION_MISMATCH`), inserts two rows with IP and user agent, and audits `CONSENT_ACCEPTED`.
+- **Education:**
+  - (a) PATCH `clearFields` per P5.5. Cleared fields become NULL and `fee_reference_normalized` is updated too. Bump the version; the `REQUEST_UPDATED` audit details list `clearedFields`.
+  - (b) Publish `EducationRequestStatusChanged` from the single transition path (`RequestTransitions.apply`) for every transition, inside the transaction.
+- **Notification module:**
+  - `@TransactionalEventListener(phase = AFTER_COMMIT)` on `EducationRequestStatusChanged`, only for `toStatus` in APPROVED, CHANGES_REQUESTED or REJECTED.
+  - Gets the email through `UserDirectory.findRecipient` and sends with `JavaMailSender` from `kyro.mail-from`.
+  - **Mail content:** fictional-safe and minimal. Request title, the new status in plain words, and a link to `${web}/recipient/requests/{id}`. **It never contains the internal rationale, the recipient message text, fee references or any `token=` string.**
+  - Failures are logged at WARN with the correlation id and never rethrown.
+  - Controlled by `kyro.notifications.email-enabled`.
+- `PasswordResetProperties` and `NotificationProperties` records.
+- DECISIONS entry.
+
+**Acceptance (integration tests; mails via the existing `TestMailConfig.CapturingMailer`, or a capturing `JavaMailSender` for notifications):**
+- **Reset:** unknown email → 202 and no mail. Known ACTIVE email → 202, mail with the link, audit row. Confirm → 204; old password fails login; new one works. Token reuse → 422. Expired token → 422. A pre-existing session for that user gets 401 on its next call (test profile sets the revalidate interval to 0s). A short new password → 422.
+- **Change password:** correct current → 204 and the calling session still works. Another session → 401. Wrong current → 422.
+- **Consents:** GET shows two history rows after registration and `reacceptRequired=false`. With `kyro.policy.terms-version` overridden in the test (`@TestPropertySource`): `true`, then POST with the right versions → `false`; a wrong version → 422.
+- **PATCH clearFields:** clears `courseName` and `dueDate` (the GET shows null). Clearing and setting the same field → 422. Clearing `title` → 422 (enum validation). A later submit gives `REQUEST_INCOMPLETE` listing `courseName`.
+- **Notifications:** REQUEST_CHANGES through the real verification flow sends exactly one mail to the recipient after commit. It contains no rationale text and no `token=`. A rolled-back transaction sends nothing. Submit and withdraw send nothing.
+- Existing `EducationRequestsIT`, `VerificationIT` and `AuthFlowIT` stay green.
+
+**Verify:** `./gradlew :apps:api:test --tests 'com.kyro.platform.identity.*'`, `./gradlew :apps:api:test --tests 'com.kyro.platform.education.*'`, `./gradlew :apps:api:test --tests 'com.kyro.platform.notification.*'`, then `./gradlew build`. Manual: `bootRun` plus a Mailpit UI check at `http://localhost:8025`.
+
+### WEB-3: Donor pledge UI, my pledges, report action, funding semantics fix (5b)
+
+**Owns:** `apps/web/src/app/(donor)/**`, `apps/web/src/features/discovery/**`, `apps/web/src/features/funding/**` (new), `apps/web/src/features/reports/**` (new), `apps/web/src/components/AppShell.tsx`, `apps/web/src/lib/queryKeys.ts`.
+
+**Build:**
+- **Request detail funding panel:** show Target, **Confirmed** (₹0, "No payments are taken in this sandbox"), **Pledged (not yet paid)** with the pledge count, and **Outstanding need = target − confirmed**. The progress bar uses confirmed only. Pledged has its own separately labelled line, not stacked on the bar. This replaces the D-011 remaining formula.
+- **Pledge flow:**
+  - "Pledge (non-binding)" replaces the disabled Fund button for DONOR users.
+  - It opens a Dialog with:
+    - a money input (`parseMoneyInput`) with client-side checks: at least ₹1 and at most `pledgeableMinor` from `getFundingSummary`
+    - a required checkbox: "I understand a pledge is not a payment. No money is collected."
+    - the persistent text "A pledge is not a payment."
+  - An idempotency key is generated with `crypto.randomUUID()` when the dialog opens and **reused for retries** of the same submission.
+  - Map `ACTIVE_PLEDGE_EXISTS`, `PLEDGE_EXCEEDS_REMAINING` (with the refreshed amount) and `PLEDGE_NOT_ALLOWED` to friendly Alerts.
+  - After success, show the viewer's pledge with a "Cancel pledge" action behind a confirm Dialog.
+  - Anonymous users get a login link; non-donors get a read-only note.
+- **`/pledges` page** (`RequireAuth DONOR`): list of my pledges with status badges, cancel reason text, "Request no longer available" when `request` is null, and Load more. AppShell nav gets "My pledges" (DONOR).
+- **Report action** on the detail page (and an optional overflow on the card): a Dialog with a reason radio group and details (required for OTHER). Success copy: "Thanks. Our team will review this request." 409 → "You have already reported this request." Anonymous → login link.
+- Cards show `₹X pledged (not yet paid)` only when the amount is greater than 0.
+- Query keys: `funding.summary(id)`, `funding.myPledges`. Pledge and cancel invalidate the summary, myPledges and the detail.
+
+**Acceptance:**
+- `pnpm --filter @kyro/web lint`, `typecheck`, `test` and `build` pass.
+- Vitest:
+  - the pledge dialog blocks submit without the checkbox and above the pledgeable amount
+  - a retry after a network error sends the **same** `Idempotency-Key`
+  - outstanding need ignores pledges
+  - a source scan finds no wording that pledges are "raised" or "funded", and no `feeReference` in `features/funding` or `features/reports`
+  - report dialog validation
+  - cancel confirm
+- Keyboard reachable and labelled.
+- Renders at 320px.
+
+**Live check (after FUND-1 and OPS-1 merge):** pledge, then cancel, then report, against `bootRun` as `donor.demo@kyro.local`.
+
+### WEB-4: Account recovery UI, consent gate, recipient edit fix, recipient funding view (5b)
+
+**Owns:** `apps/web/src/app/(auth)/**`, `apps/web/src/app/(account)/**`, `apps/web/src/app/(recipient)/**`, `apps/web/src/app/layout.tsx`, `apps/web/src/components/Providers.tsx`, `apps/web/src/components/ConsentGate.tsx` (new), `apps/web/src/features/authentication/**`, `apps/web/src/features/education/**`, `apps/web/src/features/account/**` (new).
+
+**Build:**
+- **Password reset pages:**
+  - `/forgot-password` (always shows "If an account exists, we sent a link")
+  - `/reset-password?token=` (new password plus confirm, with Zod rules matching the spec, success links to login)
+  - a "Forgot password?" link on `/login`
+- `/profile` gains a "Change password" form.
+- **`ConsentGate`** (rendered from the root layout, logged-in users only): calls `GET /me/consents`. When `reacceptRequired`, it shows a blocking accessible Dialog with links to the policies and an "Accept" action. It is not shown on the auth pages.
+- **Recipient edit:** the update payload builder sends `clearFields` for optional fields the user emptied that had a value before. It stops faking values. Closes D-010.
+- **Recipient request detail:** when APPROVED, show a funding panel from `getFundingSummary` with the same semantics as WEB-3: confirmed and outstanding first, pledged separately as non-binding. Use a local hook in `features/education`, not `features/funding`.
+
+**Acceptance:**
+- `pnpm --filter @kyro/web lint`, `typecheck`, `test` and `build` pass.
+- Vitest: reset form validation; `clearFields` payload builder (emptied vs untouched vs changed); ConsentGate shows and hides; the change-password form maps `CURRENT_PASSWORD_INCORRECT`.
+- 320px.
+
+**Live check (after ACCT-1 and FUND-1 merge):** reset via the Mailpit link, change password, clear a field on a draft.
+
+### ADM-2: Admin MFA screens, reports queue, dashboard (5b)
+
+**Owns:** `apps/admin/**`.
+
+**Build:**
+- **MFA:**
+  - `/mfa/setup`: start enrollment; show the otpauth QR, rendered client-side with the `qrcode` package (no network), plus the secret as copyable text; confirm the code; show the 10 recovery codes **once* with an "I have saved these" checkbox before continuing.
+  - `/mfa/verify`: a 6-digit code or a "use a recovery code" toggle.
+  - RoleGuard: after `/me`, if `mfa.required && !mfa.verified`, redirect to verify (enrolled) or setup (not enrolled). Any 403 `MFA_REQUIRED` or `MFA_ENROLLMENT_REQUIRED` from a query also redirects.
+  - Codes and secrets are never put in query cache, storage or URLs (`gcTime 0`, component state only).
+- **Dashboard:** `/` shows the dashboard counts and links to the queue and reports; it no longer just redirects.
+- **Reports:**
+  - `/reports`: tabs Open, Mine, Resolved, All; a table; Load more.
+  - `/reports/[reportId]`: reason, details, reporter, other reports on the request, request status, a link to `/cases/{latestCaseId}`, Claim, a resolve form (radio DISMISSED or ACTION_TAKEN, note 10–2000, "Hide request from discovery" checkbox enabled only for ACTION_TAKEN, confirm Dialog).
+  - The hold panel with "Release hold" is shown only to ADMIN.
+  - 403 and 409 codes become friendly Alerts.
+- Nav entries for Dashboard, Queue, Reports and Audit.
+
+**Acceptance:**
+- `pnpm --filter @kyro/admin lint`, `typecheck`, `test` and `build` pass.
+- Vitest:
+  - RoleGuard MFA redirects
+  - setup flow cannot continue before the recovery-code acknowledgement
+  - resolve-form rules (the hold checkbox is disabled for DISMISSED; note length)
+  - Release hold is hidden for VERIFIER-only users
+
+**Live check (after SEC-2 and OPS-1 merge):** with `KYRO_ADMIN_MFA_ENFORCED=true`, `verifier@kyro.local` verifies with a TOTP from the dev secret, claims and resolves a report with a hold; `admin@kyro.local` releases it.
+
+### INF-2: Terraform AWS staging foundation plus staging API profile (5a; replaces LATER-2)
+
+**Owns:** `infrastructure/terraform/**` (including its own `.gitignore` for `.terraform/`, `*.tfstate*`, `*.tfvars` except `*.tfvars.example`), `.github/workflows/terraform.yml`, `docs/runbooks/terraform-staging.md`, `apps/api/src/main/resources/application-staging.yml` (new), `apps/api/src/main/java/com/kyro/platform/common/storage/S3ObjectStorage.java`, and `apps/api/src/test/java/com/kyro/platform/common/storage/**`.
+
+**Build:**
+- **Layout:** `infrastructure/terraform/modules/{network,kms,s3_documents,ecr,rds,secrets,ecs_service,alb,edge,github_oidc,observability,ses}` and `envs/staging/` (`main.tf`, `variables.tf`, `outputs.tf`, `versions.tf`, `backend.hcl.example`, `staging.tfvars.example` with the fictional account `000000000000`).
+- **Versions:** Terraform ≥ 1.9, AWS provider pinned to the newest stable major. Record both in DECISIONS.
+- **No data sources** that need credentials. Availability zones, account id and region are variables, so an offline plan works.
+- **Modules:**
+  - **network:** VPC across 2 AZs with public (ALB), private-app and isolated-db subnets; one NAT gateway (staging cost); S3 gateway endpoint; interface endpoints for ECR, Secrets Manager and Logs.
+  - **kms:** customer-managed keys for documents, RDS and secrets, with rotation on.
+  - **s3_documents:** block all public access; versioning; SSE-KMS; a bucket policy that denies non-TLS and unencrypted puts; CORS PUT only from the web origin variable; noncurrent-version expiry; `aws_guardduty_malware_protection_plan` (tags objects; app gating is Phase 6).
+  - **ecr:** 3 repositories, immutable tags, scan on push, lifecycle policy.
+  - **rds:** Postgres 17, `manage_master_user_password = true`, encrypted, 7-day backups and PITR, deletion protection, private subnets, security group allowing only the api tasks.
+  - **secrets:** `kyro/staging/mfa-encryption-key` and `kyro/staging/mail-smtp`. Created **without values**; they are set out of band.
+  - **ecs_service:** Fargate cluster; services api, web and admin using the Dockerfiles from INF-1 with Service Connect; **api `desired_count = 1`, enforced by a variable validation, until Spring Session JDBC lands**; least-privilege task roles (api: S3 actions on the bucket, KMS on the documents key, read on its secrets); a log group per service.
+  - **Api task env:** `SPRING_PROFILES_ACTIVE=staging`, `KYRO_FORWARD_HEADERS_STRATEGY=native`, `KYRO_ADMIN_MFA_ENFORCED=true`, `KYRO_SEED_ENABLED=false`, `KYRO_S3_*` with no static keys, `KYRO_WEB_BASE_URL`, and secrets injected from Secrets Manager.
+  - **Web and admin images:** built with `KYRO_API_ORIGIN` pointing to the Service Connect name (D-006).
+  - **alb:** HTTPS listener with an ACM certificate ARN variable and HTTP→HTTPS redirect. Host routing: web host → web, admin host → admin, and `/api/*` on either host → api.
+  - **edge:** CloudFront in front of the ALB with a WAFv2 web ACL in us-east-1 (provider alias): AWS managed Common, KnownBadInputs and SQLi rule groups, plus a rate-based rule. The admin hostname is restricted to `admin_allowed_cidrs`.
+  - **github_oidc:** OIDC provider plus two roles: a read-only `kyro-staging-tf-plan` role trusted for `repo:arx-studios/arx-kyro:pull_request`, and a `kyro-staging-deploy` role trusted only for `environment:staging`. **Nothing assumes either role in Phase 5.**
+  - **observability:** log retention; alarms for ALB 5xx, ECS CPU and memory, and RDS free storage and CPU; an SNS topic variable.
+  - **ses:** domain identity plus DKIM outputs, behind `enable_ses = false`.
+- **`application-staging.yml`:**
+  - `logging.structured.format.console: ecs`
+  - `server.forward-headers-strategy: native`
+  - session cookie secure
+  - seed disabled
+  - `spring.mail` with `username`, `password` and STARTTLS from `KYRO_MAIL_USERNAME` and `KYRO_MAIL_PASSWORD`, port 587
+- **`S3ObjectStorage`:**
+  - a blank `access-key` → `DefaultCredentialsProvider` (task role)
+  - a blank `endpoint` → no endpoint override and `forcePathStyle(false)`
+  - a blank `public-endpoint` → the default presigner endpoint
+  - local behaviour unchanged, the `ObjectStorage` port signature unchanged (frozen)
+  - plus a unit test for the client-builder branches
+- **`terraform.yml`** (PRs and pushes touching `infrastructure/terraform/**`, plus `workflow_dispatch`), with `permissions: contents: read` and **no AWS credentials**:
+  - `terraform fmt -check -recursive`
+  - for every module and env: `terraform init -backend=false` and `terraform validate`
+  - `tflint --recursive`
+  - `trivy config --severity HIGH,CRITICAL --exit-code 1 infrastructure/terraform`, with any documented ignores carrying a justification
+  - an **offline plan** of `envs/staging` with `AWS_ACCESS_KEY_ID=mock`, `AWS_SECRET_ACCESS_KEY=mock`, provider `skip_credentials_validation`, `skip_requesting_account_id` and `skip_metadata_api_check` (set through a variable used only in CI), and `terraform plan -refresh=false -lock=false -input=false -var-file=staging.tfvars.example`
+  - **No apply step exists in any workflow.**
+- **Runbook:** state bucket bootstrap (manual, versioned and encrypted, with a DynamoDB or S3-native lock); how to fill the secrets; human-approved `plan` with the OIDC plan role; apply only with written approval; cost estimate; the single-task session limit; and the S3 malware-scan app-gating gap.
+
+**Acceptance:**
+- The workflow is green.
+- actionlint is clean.
+- trivy has no HIGH or CRITICAL findings without a justified ignore.
+- The offline plan succeeds and creates only resources (no reads).
+- gitleaks is clean.
+- `./gradlew build` is green, including the storage tests.
+
+**Verify** (local, Docker images, no install needed):
+```bash
+docker run --rm -v "$PWD/infrastructure/terraform:/tf" -w /tf hashicorp/terraform:1.9 fmt -check -recursive
+docker run --rm -v "$PWD/infrastructure/terraform:/tf" -w /tf/envs/staging hashicorp/terraform:1.9 init -backend=false   # then: validate
+docker run --rm -v "$PWD:/repo" -w /repo aquasec/trivy config --severity HIGH,CRITICAL --exit-code 1 infrastructure/terraform
+docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest
+./gradlew :apps:api:test --tests 'com.kyro.platform.common.storage.*'
+```
+
+### E2E-2: Phase 5 integration, MFA enforcement on, extended smoke and Playwright (5c)
+
+**Owns:** `e2e/**`, `scripts/smoke/**`, `.github/workflows/e2e.yml`, `docs/runbooks/local-dev.md`. Also exactly one line in `application.yml`: the default of `KYRO_ADMIN_MFA_ENFORCED` from `false` to `true`. Like E2E-1, it may make small logged bug fixes in DONE packages' paths, with DECISIONS entries for anything contract-related.
+
+**Build:**
+- **Helpers:** an RFC 6238 TOTP generator (`node:crypto`) in `e2e/support/helpers.ts` and in smoke. Admin login helpers do password, then TOTP verify (dev secret for seeded staff). The smoke self-review check enrolls the psql-granted VERIFIER through the API (start, compute code from the returned secret, confirm, verify) before calling the self-review guard. The Mailpit helper picks the message matching the subject or link pattern, not just the newest one.
+- **New Playwright specs** (Chromium; each makes its own fictional users or requests, so they run on a reused database):
+  1. **Correction loop:** submit → verifier REQUEST_CHANGES with a message → recipient sees the feedback and the "Changes requested" email arrives (no rationale text in it) → edit → resubmit → case #2 → approve → appears in the feed.
+  2. **Reject:** reject with a message → recipient sees REJECTED, the request is not editable, not in the feed, and the email arrives.
+  3. **Withdraw:** withdraw while IN_REVIEW (the case closes as WITHDRAWN in the admin Closed tab), and withdraw an APPROVED request that has a donor pledge (gone from the feed; the donor's `/pledges` shows Cancelled, "request withdrawn").
+  4. **Pledge:** the donor pledges through the dialog; the detail shows pledged separately, confirmed ₹0 and outstanding unchanged; a second pledge → friendly error; cancel.
+  5. **Report and hold:** the donor reports → verifier claims and resolves ACTION_TAKEN with a hold → the request is gone from `/discover` (and the detail is 404) → `admin@` releases → visible again.
+  6. **Password reset:** request → Mailpit link → new password → login works; a second context logged in before the reset gets a 401 redirect.
+  7. **PATCH clear:** clear a field on a draft and reload; it is empty.
+  8. **Admin MFA:** a fresh staff user (granted via psql in the test) goes through setup with QR/secret, recovery codes and verify; a wrong code shows an error.
+- **axe** (serious/critical = 0) on `/pledges`, the pledge and report dialogs, `/forgot-password`, `/reset-password`, admin `/`, `/reports`, `/reports/[id]`, `/mfa/setup` and `/mfa/verify`. **320px** checks on the detail page with the funding panel and on `/pledges`.
+- **Smoke additions:**
+  - API pledge idempotency: replay → same id, different body → 422, over-pledge → 409
+  - pledged vs confirmed fields in the feed
+  - report → hold → feed exclusion → release
+  - `MFA_REQUIRED` before verify
+  - one 429 check on the report rule (the 6th report within a minute, spread across 6 fresh requests from the seed or created ones)
+- **Workflow env:** `KYRO_ADMIN_MFA_ENFORCED=true`, `KYRO_SESSION_REVALIDATE_INTERVAL=0s`, and the existing raised `KYRO_AUTH_*` limits. Keep the per-rule defaults. Confirm the first real GitHub runs of `ci.yml`, `e2e.yml` and `terraform.yml` are green.
+- **Runbook:** dev TOTP secret, MFA reset via the ADMIN API, password-reset mail in Mailpit, new env vars, and "staff provisioning via SQL during beta" until a role API exists.
+
+**Acceptance:**
+- `pnpm smoke` exits 0.
+- `pnpm test:e2e` passes locally against dev servers, with MFA enforced.
+- `e2e.yml` is green on GitHub.
+- `./gradlew build`, `pnpm lint`, `pnpm typecheck` and `pnpm test` are green on main after the merge.
+
+**Verify:**
+```bash
+pnpm infra:up && ./gradlew :apps:api:bootRun   # KYRO_ADMIN_MFA_ENFORCED defaults to true now
+pnpm --filter @kyro/web dev ; pnpm --filter @kyro/admin dev
+pnpm smoke
+pnpm --filter @kyro/e2e exec playwright install chromium && pnpm test:e2e
+```
+
+---
+
+## P5.10 Phase 5 risks
+
+| Risk | Mitigation |
+|---|---|
+| A spec change breaks the Java build (existing tag or required field) | P5.0 rule 1. CON-2's acceptance requires `./gradlew build` green with the new interfaces unimplemented. |
+| Turning MFA on breaks smoke and E2E for 5b merges | Enforcement defaults to off until E2E-2 flips it, in the same change that updates smoke and E2E. API ITs run with it on through `application-test.yml`. |
+| Two packages edit identity files | File-level split between SEC-2 and ACCT-1 (listed). The contract between them is a database column (`credentials_version`) and `SessionAttributes` constants (CON-2). |
+| In-memory sessions and rate limits on more than one API task | Staging is pinned to one task through a variable validation. Spring Session JDBC is the first Phase 6 item. |
+| Notification email lost on a crash | Accepted for the beta (the state is durable and visible in the app). The outbox comes with the worker. |
+| An append-only trigger blocks a future account deletion | Documented in V9. Deletion must anonymise. |
+| A rate limit trips E2E or CI | Every rule has an env override. The E2E workflow raises the auth limits as before. |
+| The pledge cap is mistaken for payment logic | The pledge cap is non-binding and is documented as the template for reservations. `confirmedMinor` stays a single hard 0 source until payments. |
+
+## P5.11 Decisions each package records (take the next free D-number; re-read DECISIONS.md first)
+
+- CON-2: D-017, the Phase 5 contract plus migration renumbering (supersedes D-003).
+- FUND-1: pledge semantics and idempotency.
+- OPS-1: reporting read exception and holds.
+- SEC-2: MFA, sessions and rate limits.
+- ACCT-1: reset, consent, notifications and clearFields.
+- INF-2: Terraform versions, offline plan and single-task constraint.
+- E2E-2: MFA enforcement flip.
+
+## P5.12 Phase 6 candidates (not to be built now)
+
+1. Spring Session JDBC, then scale out the api.
+2. Malware-scan gating of document view URLs, and EXIF stripping.
+3. `apps/worker` with an outbox (notifications, pledge lapsing).
+4. Appeals (TRUST-007).
+5. Staff role management API.
+6. Server-side consent enforcement, data export, and a retention-aware account deletion.
+7. Metrics and tracing (OTel).
+8. Payment sandbox, reservations, double-entry ledger (V10+), behind the §16 compliance gates.
+
