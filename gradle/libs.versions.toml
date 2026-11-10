@@ -1,0 +1,14 @@
+[versions]
+spring-boot = "4.1.2"
+openapi-generator = "7.14.0"
+awssdk = "2.57.12"
+archunit = "1.5.1"
+
+[libraries]
+awssdk-bom = { module = "software.amazon.awssdk:bom", version.ref = "awssdk" }
+awssdk-s3 = { module = "software.amazon.awssdk:s3" }
+archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
+
+[plugins]
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+openapi-generator = { id = "org.openapi.generator", version.ref = "openapi-generator" }
