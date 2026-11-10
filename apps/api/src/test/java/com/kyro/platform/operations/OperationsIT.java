@@ -17,7 +17,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -137,7 +136,6 @@ class OperationsIT extends IntegrationTestBase {
     }
 
     @Test
-    @Disabled("needs SEC-2: config-driven rate limit rule report-create (5/min); remove when rebasing after SEC-2")
     void sixthReportInAMinuteIsRateLimited() throws Exception {
         TestUser donor = users.createActiveUser(Role.DONOR);
         for (int i = 0; i < 5; i++) {

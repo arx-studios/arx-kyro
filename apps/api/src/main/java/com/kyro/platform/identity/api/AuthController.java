@@ -13,7 +13,7 @@ import com.kyro.platform.contract.model.VerifyEmailRequest;
 import com.kyro.platform.identity.application.AuthService;
 import com.kyro.platform.identity.application.RegisterCommand;
 import com.kyro.platform.identity.application.mfa.MfaService;
-import com.kyro.platform.identity.application.session.SessionCredentials;
+import com.kyro.platform.identity.domain.UserAccountRepository;
 import com.kyro.platform.common.security.SessionAttributes;
 import java.time.Clock;
 import java.time.Instant;
@@ -42,7 +42,7 @@ class AuthController implements AuthApi {
     private final CurrentActor actor;
     private final HttpServletRequest request;
     private final HttpServletResponse response;
-    private final SessionCredentials credentials;
+    private final UserAccountRepository credentials;
     private final MfaService mfa;
     private final Clock clock;
 
@@ -52,7 +52,7 @@ class AuthController implements AuthApi {
             CurrentActor actor,
             HttpServletRequest request,
             HttpServletResponse response,
-            SessionCredentials credentials,
+            UserAccountRepository credentials,
             MfaService mfa,
             Clock clock) {
         this.credentials = credentials;
@@ -119,7 +119,7 @@ class AuthController implements AuthApi {
         }
         HttpSession session = request.getSession(true);
         session.removeAttribute(SessionAttributes.MFA_VERIFIED_AT); // a new login never inherits MFA state
-        session.setAttribute(SessionAttributes.CREDENTIALS_VERSION, credentials.currentVersion(user.id()));
+        session.setAttribute(SessionAttributes.CREDENTIALS_VERSION, credentials.credentialsVersion(user.id()));
         session.setAttribute(SessionAttributes.LAST_REVALIDATED_AT, Instant.now(clock));
 
         KyroPrincipal principal = new KyroPrincipal(user.id(), user.email(), user.roles());
