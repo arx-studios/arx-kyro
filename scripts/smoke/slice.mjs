@@ -10,6 +10,7 @@
 //      SMOKE_SKIP_SELF_REVIEW=1 to skip the step that needs `docker compose exec postgres psql`.
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { DEV_TOTP_SECRET, nextTotp } from './totp.mjs';
 
 const API = (process.env.API_URL ?? 'http://localhost:8080').replace(/\/$/, '');
 const MAILPIT = (process.env.MAILPIT_URL ?? 'http://localhost:8025').replace(/\/$/, '');
@@ -94,20 +95,49 @@ class Client {
     await this.refreshCsrf(); // session id rotated
     return r.body;
   }
+  /**
+   * Staff login with enforced admin MFA: password, then the second step. Before the TOTP verify the admin API answers
+   * 403 MFA_REQUIRED (or MFA_ENROLLMENT_REQUIRED when no authenticator is linked yet).
+   */
+  async loginStaff(email, secret = DEV_TOTP_SECRET) {
+    const me = await this.login(email);
+    check(me.mfa?.required === true && me.mfa?.verified === false, `${this.name}: login response says MFA required, not yet verified`, me.mfa);
+    const blocked = await this.call('GET', '/api/v1/admin/dashboard');
+    check(blocked.status === 403 && blocked.body?.code === 'MFA_REQUIRED', `${this.name}: admin API before MFA verify -> 403 MFA_REQUIRED`, blocked);
+    await this.verifyTotp(secret);
+    return me;
+  }
+  async verifyTotp(secret) {
+    const code = await nextTotp(secret);
+    const v = await this.call('POST', '/api/v1/auth/mfa/verify', { body: { code } });
+    check(v.status === 200 && v.body?.mfa?.verified === true, `${this.name}: MFA verify -> 200 verified`, v);
+    await this.refreshCsrf();
+    const ok = await this.call('GET', '/api/v1/admin/dashboard');
+    check(ok.status === 200, `${this.name}: admin API after MFA verify -> 200`, ok);
+    return code;
+  }
 }
 
-async function mailpitLink(email, attempts = 30) {
+/** Searches Mailpit for a mail to `email` matching subject and body patterns; returns { subject, text }. */
+async function mailpitFind(email, { subject, text }, attempts = 40) {
   for (let i = 0; i < attempts; i++) {
     const res = await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`);
     const list = await res.json();
-    if (list.messages?.length) {
-      const msg = await (await fetch(`${MAILPIT}/api/v1/message/${list.messages[0].ID}`)).json();
-      const m = /token=([A-Za-z0-9._~%-]+)/.exec(`${msg.Text ?? ''}\n${msg.HTML ?? ''}`);
-      if (m) return decodeURIComponent(m[1]);
+    for (const m of list.messages ?? []) {
+      if (subject && !subject.test(m.Subject)) continue;
+      const msg = await (await fetch(`${MAILPIT}/api/v1/message/${m.ID}`)).json();
+      const body = `${msg.Text ?? ''}\n${msg.HTML ?? ''}`;
+      if (text && !text.test(body)) continue;
+      return { subject: m.Subject, text: body };
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`no verification mail for ${email}`);
+  throw new Error(`no matching mail for ${email}`);
+}
+
+async function mailpitLink(email, linkPattern = /verify-email\?token=([A-Za-z0-9._~%-]+)/) {
+  const mail = await mailpitFind(email, { text: linkPattern });
+  return decodeURIComponent(linkPattern.exec(mail.text)[1]);
 }
 
 // Smallest valid-looking PDF (magic bytes %PDF-). Fictional content.
@@ -219,7 +249,7 @@ async function main() {
 
   step('Verifier: queue, claim, view document, approve');
   const ver = new Client('verifier');
-  await ver.login('verifier@kyro.local');
+  await ver.loginStaff('verifier@kyro.local');
   const queue = await ver.call('GET', '/api/v1/admin/verification/cases?queue=ALL&limit=50');
   check(queue.status === 200, 'queue UNASSIGNED -> 200', queue);
   const kase = queue.body.items.find((i) => i.requestId === requestId);
@@ -279,6 +309,172 @@ async function main() {
   });
   check(noCsrf.status === 403, 'POST without CSRF header -> 403', noCsrf.status);
 
+  step('Status-change email for the approval (no internal rationale in it)');
+  const approvedMail = await mailpitFind(rec.email, { subject: /Update on your KYRO request/, text: /was approved/ });
+  check(approvedMail.text.includes(`/recipient/requests/${requestId}`), 'approval email links to the request');
+  check(!approvedMail.text.includes('Fictional invoice matches'), 'approval email does not contain the internal rationale');
+
+  step('Pledges: idempotency, uniqueness, cap, pledged vs confirmed, cancel');
+  const pledger = await registerVerifyLogin('pledger', ['DONOR']);
+  const pc = pledger.c;
+  const pledgeBody = (amountMinor, ack = true) => ({ amount: { amountMinor, currency: 'INR' }, acknowledgeNonBinding: ack });
+  const pledgeUrl = `/api/v1/funding/requests/${requestId}/pledges`;
+  const sumBefore = await anon.call('GET', `/api/v1/funding/requests/${requestId}/summary`);
+  check(sumBefore.status === 200 && sumBefore.body.confirmedMinor === 0 && sumBefore.body.pledgesAreNonBinding === true, 'public funding summary: confirmed 0, pledges non-binding', sumBefore.body);
+  const targetMinor = sumBefore.body.target.amountMinor;
+  const noKey = await pc.call('POST', pledgeUrl, { body: pledgeBody(100000) });
+  check(noKey.status === 400 && noKey.body?.code === 'MALFORMED_REQUEST', 'pledge without Idempotency-Key -> 400 MALFORMED_REQUEST', noKey);
+  const noAck = await pc.call('POST', pledgeUrl, { body: pledgeBody(100000, false), headers: { 'Idempotency-Key': randomUUID() } });
+  check(noAck.status === 422, 'pledge without acknowledgement -> 422', noAck);
+  const anonPledge = await anon.call('POST', pledgeUrl, { body: pledgeBody(100000), headers: { 'Idempotency-Key': randomUUID() } });
+  check(anonPledge.status === 401, 'anonymous pledge -> 401', anonPledge);
+  const recPledge = await rec.c.call('POST', pledgeUrl, { body: pledgeBody(100000), headers: { 'Idempotency-Key': randomUUID() } });
+  check(recPledge.status === 403, 'recipient cannot pledge -> 403', recPledge);
+  const key = randomUUID();
+  const p1 = await pc.call('POST', pledgeUrl, { body: pledgeBody(100000), headers: { 'Idempotency-Key': key } });
+  check(p1.status === 201 && p1.body.status === 'ACTIVE' && p1.body.nonBinding === true, 'create pledge -> 201 ACTIVE non-binding', p1);
+  const replay = await pc.call('POST', pledgeUrl, { body: pledgeBody(100000), headers: { 'Idempotency-Key': key } });
+  check(replay.status === 200 && replay.body.id === p1.body.id, 'idempotent replay -> 200 with the same pledge id', replay);
+  const reuse = await pc.call('POST', pledgeUrl, { body: pledgeBody(200000), headers: { 'Idempotency-Key': key } });
+  check(reuse.status === 422 && reuse.body?.code === 'IDEMPOTENCY_KEY_REUSED', 'same key, different body -> 422 IDEMPOTENCY_KEY_REUSED', reuse);
+  const second = await pc.call('POST', pledgeUrl, { body: pledgeBody(100000), headers: { 'Idempotency-Key': randomUUID() } });
+  check(second.status === 409 && second.body?.code === 'ACTIVE_PLEDGE_EXISTS', 'second active pledge for the same request -> 409 ACTIVE_PLEDGE_EXISTS', second);
+  const bigDonor = await registerVerifyLogin('bigdonor', ['DONOR']);
+  const over = await bigDonor.c.call('POST', pledgeUrl, { body: pledgeBody(targetMinor + 100000), headers: { 'Idempotency-Key': randomUUID() } });
+  check(over.status === 409, 'pledge above the remaining cap -> 409', over);
+  const feedP = await anon.call('GET', '/api/v1/discovery/feed?limit=50');
+  const cardP = feedP.body.items.find((i) => i.id === requestId);
+  check(cardP.funding.pledgedMinor === 100000 && cardP.funding.confirmedMinor === 0, 'feed card: pledged 100000, confirmed still 0', cardP.funding);
+  const sumP = await pc.call('GET', `/api/v1/funding/requests/${requestId}/summary`);
+  check(sumP.body.remainingMinor === targetMinor && sumP.body.pledgedMinor === 100000 && sumP.body.viewerPledge?.id === p1.body.id, 'summary: remaining unchanged by the pledge; viewerPledge present', sumP.body);
+  check(!JSON.stringify(sumP.body).includes(pledger.email), 'summary does not expose donor identity');
+  const mineP = await pc.call('GET', '/api/v1/me/funding/pledges');
+  check(mineP.status === 200 && mineP.body.items.some((i) => i.pledge.id === p1.body.id), 'my pledges lists the pledge', mineP.body);
+  const foreignCancel = await bigDonor.c.call('POST', `/api/v1/funding/pledges/${p1.body.id}/cancel`);
+  check(foreignCancel.status === 404 || foreignCancel.status === 403, 'another donor cannot cancel the pledge', foreignCancel);
+  const cancelled = await pc.call('POST', `/api/v1/funding/pledges/${p1.body.id}/cancel`);
+  check(cancelled.status === 200 && cancelled.body.status === 'CANCELLED', 'cancel pledge -> CANCELLED', cancelled);
+  const feedC = await anon.call('GET', '/api/v1/discovery/feed?limit=50');
+  check(feedC.body.items.find((i) => i.id === requestId).funding.pledgedMinor === 0, 'feed card: pledged back to 0 after cancel');
+
+  step('Rate limit: the 6th report within a minute is 429');
+  const spammer = await registerVerifyLogin('spammer', ['DONOR']);
+  const reportBody = { requestId, reason: 'OTHER', details: 'Fictional smoke-test report.' };
+  const statuses = [];
+  let limited = null;
+  for (let i = 0; i < 6; i++) {
+    const r = await spammer.c.call('POST', '/api/v1/reports', { body: reportBody });
+    statuses.push(r.status);
+    if (r.status === 429) limited = r;
+  }
+  check(statuses[0] === 202 && statuses.slice(1, 5).every((s) => s === 409) && statuses[5] === 429, 'reports: 202, then 409 x4, then 429 on the 6th', statuses);
+  check(Number(limited.headers.get('retry-after')) > 0, '429 carries Retry-After');
+
+  step('Reports and moderation hold: report, claim, resolve with hold, hidden, ADMIN release');
+  const reporter = await registerVerifyLogin('reporter', ['DONOR']);
+  const rc = reporter.c;
+  check((await anon.call('POST', '/api/v1/reports', { body: reportBody })).status === 401, 'anonymous report -> 401');
+  check((await rec.c.call('POST', '/api/v1/reports', { body: reportBody })).status === 422, 'owner cannot report their own request -> 422');
+  const noDetails = await rc.call('POST', '/api/v1/reports', { body: { requestId, reason: 'OTHER' } });
+  check(noDetails.status === 422, 'reason OTHER without details -> 422', noDetails);
+  const rep = await rc.call('POST', '/api/v1/reports', { body: { requestId, reason: 'SUSPECTED_FRAUD', details: 'Fictional concern from the smoke test.' } });
+  check(rep.status === 202 && rep.body.status === 'OPEN', 'report -> 202 OPEN', rep);
+  const dupe = await rc.call('POST', '/api/v1/reports', { body: { requestId, reason: 'SUSPECTED_FRAUD' } });
+  check(dupe.status === 409 && dupe.body?.code === 'REPORT_ALREADY_OPEN', 'duplicate open report -> 409 REPORT_ALREADY_OPEN', dupe);
+  check((await rc.call('GET', '/api/v1/admin/reports')).status === 403, 'donor cannot list reports -> 403');
+  const rq = await ver.call('GET', '/api/v1/admin/reports?queue=OPEN&limit=50');
+  const mine2 = rq.body.items?.find((r) => r.id === rep.body.id);
+  check(rq.status === 200 && Boolean(mine2) && mine2.requestId === requestId, 'verifier sees the report in the OPEN queue', rq.body);
+  const dash = await ver.call('GET', '/api/v1/admin/dashboard');
+  check(dash.status === 200 && dash.body.openReports >= 1, 'dashboard counts open reports', dash.body);
+  const assign = await ver.call('POST', `/api/v1/admin/reports/${rep.body.id}/assign`);
+  check(assign.status === 200, 'claim report -> 200', assign);
+  const shortNote = await ver.call('POST', `/api/v1/admin/reports/${rep.body.id}/resolve`, { body: { resolution: 'ACTION_TAKEN', note: 'short', holdRequest: true } });
+  check(shortNote.status === 422, 'resolve with a too-short note -> 422', shortNote);
+  const dismissHold = await ver.call('POST', `/api/v1/admin/reports/${rep.body.id}/resolve`, { body: { resolution: 'DISMISSED', note: 'Fictional: dismiss must not hold.', holdRequest: true } });
+  check(dismissHold.status === 422, 'DISMISSED with a hold -> 422', dismissHold);
+  const resolved = await ver.call('POST', `/api/v1/admin/reports/${rep.body.id}/resolve`, { body: { resolution: 'ACTION_TAKEN', note: 'Fictional: hide while we investigate.', holdRequest: true } });
+  check(resolved.status === 200 && resolved.body.status === 'RESOLVED' && resolved.body.requestOnHold === true, 'resolve ACTION_TAKEN with hold -> 200', resolved.body);
+  const feedH = await anon.call('GET', '/api/v1/discovery/feed?limit=50');
+  check(!feedH.body.items.some((i) => i.id === requestId), 'held request is gone from the public feed');
+  check((await anon.call('GET', `/api/v1/discovery/feed/${requestId}`)).status === 404, 'held request detail -> 404');
+  const pledgeHeld = await bigDonor.c.call('POST', pledgeUrl, { body: pledgeBody(100000), headers: { 'Idempotency-Key': randomUUID() } });
+  check(pledgeHeld.status === 404, 'pledge on a held request -> 404', pledgeHeld);
+  const verRelease = await ver.call('POST', `/api/v1/admin/requests/${requestId}/hold/release`);
+  check(verRelease.status === 403, 'VERIFIER cannot release a hold -> 403', verRelease);
+  const adm = new Client('admin');
+  await adm.loginStaff('admin@kyro.local');
+  const release = await adm.call('POST', `/api/v1/admin/requests/${requestId}/hold/release`);
+  check([200, 204].includes(release.status), 'ADMIN releases the hold', release);
+  const feedR = await anon.call('GET', '/api/v1/discovery/feed?limit=50');
+  check(feedR.body.items.some((i) => i.id === requestId), 'request is visible in the feed again after release');
+  check((await anon.call('GET', `/api/v1/discovery/feed/${requestId}`)).status === 200, 'request detail is 200 again');
+  const again2 = await adm.call('POST', `/api/v1/admin/requests/${requestId}/hold/release`);
+  check(again2.status === 404, 'releasing again (no active hold) -> 404', again2);
+  const holdAudit = await adm.call('GET', `/api/v1/admin/audit-events?entityId=${requestId}&limit=50`);
+  check(holdAudit.status === 200 && holdAudit.body.items.length > 0, 'audit has events for the request', holdAudit.body);
+
+  step('Optional field clearing (PATCH clearFields) and withdraw cancels pledges');
+  const draftId = (
+    await rec.c.call('POST', '/api/v1/education/requests', {
+      body: {
+        title: `Smoke clear ${run}`,
+        expenseType: 'TUITION',
+        amount: { amountMinor: 1000000, currency: 'INR' },
+        story: 'Fictional story to be cleared again.',
+        courseName: 'Fictional course',
+        feeReference: `CLEAR-REF-${run}`,
+      },
+    })
+  ).body.id;
+  const draft = await rec.c.call('GET', `/api/v1/education/requests/${draftId}`);
+  const cleared = await rec.c.call('PATCH', `/api/v1/education/requests/${draftId}`, {
+    body: { version: draft.body.version, clearFields: ['courseName', 'feeReference'] },
+  });
+  check(cleared.status === 200 && !cleared.body.courseName && !cleared.body.feeReference, 'PATCH clearFields nulls the fields', cleared.body);
+  const conflicting = await rec.c.call('PATCH', `/api/v1/education/requests/${draftId}`, {
+    body: { version: cleared.body.version, story: 'Another story that is long enough.', clearFields: ['story'] },
+  });
+  check(conflicting.status === 422, 'a field both cleared and given -> 422', conflicting);
+  const withdrawPledge = await pc.call('POST', pledgeUrl, { body: pledgeBody(150000), headers: { 'Idempotency-Key': randomUUID() } });
+  check(withdrawPledge.status === 201, 'pledger pledges again after the cancel (new key)', withdrawPledge);
+  const withdrawn = await rec.c.call('POST', `/api/v1/education/requests/${requestId}/withdraw`);
+  check(withdrawn.status === 200 && withdrawn.body.status === 'WITHDRAWN', 'recipient withdraws the approved request', withdrawn);
+  const afterWithdraw = await pc.call('GET', `/api/v1/funding/pledges/${withdrawPledge.body.id}`);
+  check(afterWithdraw.body.status === 'CANCELLED' && afterWithdraw.body.cancelReason === 'REQUEST_WITHDRAWN', 'withdrawal cancelled the pledge (REQUEST_WITHDRAWN)', afterWithdraw.body);
+  check((await anon.call('GET', `/api/v1/discovery/feed/${requestId}`)).status === 404, 'withdrawn request is not public');
+
+  step('Password change and reset revoke other sessions');
+  const second2 = new Client('other-session');
+  await second2.login(other.email, PASSWORD);
+  const NEW1 = 'SmokeChanged!2026-pw1';
+  const NEW2 = 'SmokeReset!2026-pw2';
+  const wrongCurrent = await other.c.call('POST', '/api/v1/me/password', { body: { currentPassword: 'definitely-wrong-pw', newPassword: NEW1 } });
+  check(wrongCurrent.status === 422 && wrongCurrent.body?.code === 'CURRENT_PASSWORD_INCORRECT', 'change password with a wrong current -> 422 CURRENT_PASSWORD_INCORRECT', wrongCurrent);
+  const changed = await other.c.call('POST', '/api/v1/me/password', { body: { currentPassword: PASSWORD, newPassword: NEW1 } });
+  check([200, 204].includes(changed.status), 'change password', changed);
+  check((await other.c.call('GET', '/api/v1/me')).status === 200, 'the changing session stays signed in');
+  check((await second2.call('GET', '/api/v1/me')).status === 401, 'the other session is revoked after the password change -> 401');
+  const oldLogin = new Client('old-password');
+  await oldLogin.refreshCsrf();
+  check((await oldLogin.call('POST', '/api/v1/auth/session', { body: { email: other.email, password: PASSWORD } })).status === 401, 'old password no longer works');
+  const third = new Client('third-session');
+  await third.login(other.email, NEW1);
+  const unknownReset = await anon.call('POST', '/api/v1/auth/password-reset', { body: { email: `nobody.${run}@kyro.local` } });
+  check(unknownReset.status === 202, 'password reset for an unknown address -> 202 (neutral)', unknownReset);
+  const resetReq = await anon.call('POST', '/api/v1/auth/password-reset', { body: { email: other.email } });
+  check(resetReq.status === 202, 'password reset request -> 202', resetReq);
+  const resetToken = await mailpitLink(other.email, /reset-password\?token=([A-Za-z0-9._~%-]+)/);
+  const weak = await anon.call('POST', '/api/v1/auth/password-reset/confirm', { body: { token: resetToken, newPassword: 'short' } });
+  check(weak.status === 422, 'reset with a too-short password -> 422', weak);
+  const confirmReset = await anon.call('POST', '/api/v1/auth/password-reset/confirm', { body: { token: resetToken, newPassword: NEW2 } });
+  check([200, 204].includes(confirmReset.status), 'reset password with the Mailpit token', confirmReset);
+  const reuseToken = await anon.call('POST', '/api/v1/auth/password-reset/confirm', { body: { token: resetToken, newPassword: NEW2 } });
+  check(reuseToken.status === 422 && reuseToken.body?.code === 'TOKEN_INVALID', 'a reset token works only once -> 422 TOKEN_INVALID', reuseToken);
+  check((await third.call('GET', '/api/v1/me')).status === 401, 'sessions from before the reset are revoked -> 401');
+  const final = new Client('after-reset');
+  await final.login(other.email, NEW2);
+
   step('Self-review is forbidden');
   if (process.env.SMOKE_SKIP_SELF_REVIEW === '1') {
     console.log('  skipped (SMOKE_SKIP_SELF_REVIEW=1)');
@@ -298,8 +494,20 @@ async function main() {
       process.exit(1);
     }
     const dual = new Client('recipient-verifier');
-    await dual.login(rec.email, PASSWORD);
-    const q = await dual.call('GET', '/api/v1/admin/verification/cases?queue=ALL&limit=50');
+    const dualMe = await dual.login(rec.email, PASSWORD);
+    check(dualMe.mfa?.required === true && dualMe.mfa?.enrolled === false, 'new staff user: MFA required, not enrolled', dualMe.mfa);
+    const notEnrolled = await dual.call('GET', '/api/v1/admin/dashboard');
+    check(notEnrolled.status === 403 && notEnrolled.body?.code === 'MFA_ENROLLMENT_REQUIRED', 'new staff user: admin API -> 403 MFA_ENROLLMENT_REQUIRED', notEnrolled);
+    const enroll = await dual.call('POST', '/api/v1/auth/mfa/totp/enrollment');
+    check([200, 201].includes(enroll.status) && enroll.body?.secret, 'start TOTP enrollment returns a secret', enroll);
+    const wrongConfirm = await dual.call('POST', '/api/v1/auth/mfa/totp/enrollment/confirm', { body: { code: '000000' } });
+    check(wrongConfirm.status === 422, 'confirm enrollment with a wrong code -> 422', wrongConfirm);
+    const confirm = await dual.call('POST', '/api/v1/auth/mfa/totp/enrollment/confirm', {
+      body: { code: await nextTotp(enroll.body.secret) },
+    });
+    check(confirm.status === 200 && confirm.body?.codes?.length === 10, 'confirm enrollment -> 10 recovery codes', confirm);
+    await dual.verifyTotp(enroll.body.secret);
+    const q =await dual.call('GET', '/api/v1/admin/verification/cases?queue=ALL&limit=50');
     const own = q.body.items?.find((i) => i.requestId === second);
     check(Boolean(own), 'own request case is visible to the dual-role user', q);
     const selfClaim = await dual.call('POST', `/api/v1/admin/verification/cases/${own.id}/assign`);

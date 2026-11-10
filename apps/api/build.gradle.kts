@@ -103,8 +103,12 @@ tasks.named("openApiGenerate") {
             // fails handler mapping with HttpMediaTypeNotAcceptableException (500). Drop that lone
             // produces: the error handler still writes problem+json for failures.
             val lone = Regex("[ \\t]*produces = \\{ \"application/problem\\+json\" \\},\\R")
+            // Phase 5 operations without a path/query parameter list can have `produces` as the LAST
+            // annotation attribute (no trailing comma); strip that form too (D-E2E-2).
+            val last = Regex(",\\R[ \\t]*produces = \\{ \"application/problem\\+json\" \\}")
             val current = f.readText()
-            if (lone.containsMatchIn(current)) f.writeText(current.replace(lone, ""))
+            val stripped = current.replace(lone, "").replace(last, "")
+            if (stripped != current) f.writeText(stripped)
         }
     }
 }

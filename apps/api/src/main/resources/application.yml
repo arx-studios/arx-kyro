@@ -84,7 +84,7 @@ kyro:
   notifications:      # NotificationProperties (ACCT-1)
     email-enabled: ${KYRO_NOTIFICATIONS_EMAIL_ENABLED:true}
   mfa:                # MfaProperties (SEC-2)
-    admin-enforced: ${KYRO_ADMIN_MFA_ENFORCED:false}   # E2E-2 flips the default to true
+    admin-enforced: ${KYRO_ADMIN_MFA_ENFORCED:true}   # E2E-2: enforced by default (D-E2E-2)
     issuer: "KYRO Sandbox"
     encryption-key: ${KYRO_MFA_ENCRYPTION_KEY:}         # base64 32 bytes; required outside local/test
     recovery-code-count: 10
