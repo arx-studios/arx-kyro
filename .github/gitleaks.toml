@@ -10,7 +10,10 @@ regexes = [
   '''kyro_local''',
   '''kyro-minio-secret''',
   '''KyroLocal!2026''',
+  '''KYROLOCALDEVTOTPAAAAAAAAAAAAAAAA''',
 ]
 paths = [
+  '''(^|/)application-local\.yml$''',
+  '''apps/api/src/test/resources/application-test\.yml$''',
   '''(^|/)pnpm-lock\.yaml$''',
 ]

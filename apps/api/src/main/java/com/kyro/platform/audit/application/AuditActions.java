@@ -34,4 +34,30 @@ public final class AuditActions {
     public static final String CASE_ASSIGNED = "CASE_ASSIGNED";
     public static final String CASE_CLOSED = "CASE_CLOSED";
     public static final String VERIFICATION_DECIDED = "VERIFICATION_DECIDED";
+
+    // Funding (entity PLEDGE)
+    public static final String PLEDGE_CREATED = "PLEDGE_CREATED";
+    public static final String PLEDGE_CANCELLED = "PLEDGE_CANCELLED";
+
+    // Operations (entities USER_REPORT, FUNDING_REQUEST for holds)
+    public static final String REPORT_CREATED = "REPORT_CREATED";
+    public static final String REPORT_ASSIGNED = "REPORT_ASSIGNED";
+    public static final String REPORT_RESOLVED = "REPORT_RESOLVED";
+    public static final String REQUEST_HOLD_PLACED = "REQUEST_HOLD_PLACED";
+    public static final String REQUEST_HOLD_RELEASED = "REQUEST_HOLD_RELEASED";
+
+    // Account (entity USER)
+    public static final String PASSWORD_RESET_REQUESTED = "PASSWORD_RESET_REQUESTED";
+    public static final String PASSWORD_RESET_COMPLETED = "PASSWORD_RESET_COMPLETED";
+    public static final String PASSWORD_CHANGED = "PASSWORD_CHANGED";
+    public static final String CONSENT_ACCEPTED = "CONSENT_ACCEPTED";
+
+    // MFA and sessions (entity USER). Details never contain secrets, tokens, codes or passwords.
+    public static final String MFA_ENROLLMENT_STARTED = "MFA_ENROLLMENT_STARTED";
+    public static final String MFA_ENROLLED = "MFA_ENROLLED";
+    public static final String MFA_VERIFIED = "MFA_VERIFIED";
+    public static final String MFA_FAILED = "MFA_FAILED";
+    public static final String MFA_RECOVERY_CODE_USED = "MFA_RECOVERY_CODE_USED";
+    public static final String MFA_RESET = "MFA_RESET";
+    public static final String SESSION_REVOKED = "SESSION_REVOKED";
 }

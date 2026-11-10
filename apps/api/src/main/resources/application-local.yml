@@ -7,6 +7,9 @@ server:
 kyro:
   seed:
     enabled: ${KYRO_SEED_ENABLED:true}
+  mfa:
+    # Dev-only AES key (base64, 32 bytes). Never use outside the local profile.
+    encryption-key: ${KYRO_MFA_ENCRYPTION_KEY:Wtm6AD4oPbYXMEngj7+HulgyQuSB2Ebm4H1L1NZRom8=}
 
 logging:
   level:

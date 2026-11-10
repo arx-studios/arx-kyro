@@ -577,6 +577,439 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/funding/requests/{requestId}/pledges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["RequestId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a non-binding pledge
+         * @description Requires role DONOR. A pledge is a non-binding statement of intent, not a payment, and
+         *     it never counts as money raised. Send a fresh `Idempotency-Key` per attempt and reuse it
+         *     on retry: a replay with the same key and body returns 200 with the existing pledge, the
+         *     same key with a different body returns 422 `IDEMPOTENCY_KEY_REUSED`. A donor may hold one
+         *     ACTIVE pledge per request (409 `ACTIVE_PLEDGE_EXISTS`). The amount may not exceed what is
+         *     still pledgeable (409 `PLEDGE_EXCEEDS_REMAINING`). A request that is not in the public
+         *     view is 404; own request or past due date is 422 `PLEDGE_NOT_ALLOWED`;
+         *     `acknowledgeNonBinding` other than true is 422 `VALIDATION_FAILED`.
+         */
+        post: operations["createPledge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/funding/pledges/{pledgeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pledgeId: components["parameters"]["PledgeId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get one of my pledges
+         * @description Requires role DONOR and ownership; another donor's pledge is 404.
+         */
+        get: operations["getPledge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/funding/pledges/{pledgeId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pledgeId: components["parameters"]["PledgeId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel my pledge
+         * @description Requires role DONOR and ownership. 409 `INVALID_STATE_TRANSITION` when the pledge is not ACTIVE.
+         */
+        post: operations["cancelPledge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/funding/pledges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my pledges
+         * @description Requires role DONOR. Newest first. `request` is null when the request is no longer public.
+         */
+        get: operations["listMyPledges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/funding/requests/{requestId}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["RequestId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get the funding summary of a public request
+         * @description Public. 404 when the request is not in the public view. `viewerPledge` is set only for a
+         *     donor session that holds a pledge on the request. Pledges never count as money raised.
+         */
+        get: operations["getFundingSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Report a public request
+         * @description Any authenticated user. 404 when the request is not in the public view. Reporting your own
+         *     request is 422 `VALIDATION_FAILED`. `details` is required when `reason` is OTHER (422).
+         *     A second open report by the same reporter on the same request is 409 `REPORT_ALREADY_OPEN`.
+         */
+        post: operations["createReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List user reports
+         * @description Requires role VERIFIER or ADMIN. `queue` OPEN (default) means OPEN plus IN_REVIEW.
+         */
+        get: operations["listReports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reports/{reportId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: components["parameters"]["ReportId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a report
+         * @description Requires role VERIFIER or ADMIN.
+         */
+        get: operations["getReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reports/{reportId}/assign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: components["parameters"]["ReportId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim a report
+         * @description Requires role VERIFIER or ADMIN. Assigns the report to the caller and moves it to
+         *     IN_REVIEW. Idempotent for the holder; 409 `REPORT_ALREADY_ASSIGNED` when held by someone
+         *     else; 409 `INVALID_STATE_TRANSITION` when already RESOLVED.
+         */
+        post: operations["assignReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reports/{reportId}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: components["parameters"]["ReportId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a report
+         * @description Requires role VERIFIER or ADMIN and assignment to the caller (409
+         *     `REPORT_NOT_ASSIGNED_TO_YOU`). `holdRequest=true` places a moderation hold that hides the
+         *     request from discovery and is allowed only with ACTION_TAKEN (422 otherwise).
+         */
+        post: operations["resolveReport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/requests/{requestId}/hold/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["RequestId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release a moderation hold
+         * @description Requires role ADMIN only. 404 when the request has no active hold.
+         */
+        post: operations["releaseRequestHold"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get operational counts
+         * @description Requires role VERIFIER or ADMIN.
+         */
+        get: operations["getAdminDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a password reset email
+         * @description Always returns 202 whether or not the email exists, so it cannot be used to discover accounts.
+         */
+        post: operations["requestPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password-reset/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set a new password with a reset token
+         * @description A successful reset invalidates every existing session of the user. Invalid, expired or used tokens give 422 `TOKEN_INVALID`.
+         */
+        post: operations["confirmPasswordReset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change my password
+         * @description Wrong current password is 422 `CURRENT_PASSWORD_INCORRECT`. Other sessions of the user are invalidated.
+         */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/consents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get my consent status and history */
+        get: operations["getMyConsents"];
+        put?: never;
+        /**
+         * Accept the current policy versions
+         * @description The body must name the current versions (422 `CONSENT_VERSION_MISMATCH` otherwise). Appends consent records.
+         */
+        post: operations["acceptCurrentPolicies"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/totp/enrollment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start TOTP enrollment
+         * @description Requires role VERIFIER or ADMIN. 409 `MFA_ALREADY_ENROLLED` when a confirmed credential exists. Returns the secret once.
+         */
+        post: operations["startTotpEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/totp/enrollment/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm TOTP enrollment
+         * @description Requires role VERIFIER or ADMIN. A wrong code is 422 `MFA_CODE_INVALID`. Returns the one-time recovery codes, shown once; the session becomes MFA-verified.
+         */
+        post: operations["confirmTotpEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify MFA for this session
+         * @description Requires role VERIFIER or ADMIN. Send exactly one of `code` or `recoveryCode` (422 otherwise). A wrong code is 422 `MFA_CODE_INVALID`.
+         */
+        post: operations["verifyMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{userId}/mfa/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a staff member's MFA
+         * @description Requires role ADMIN only, and not on yourself. Removes the credential and recovery codes and revokes the user's sessions.
+         */
+        post: operations["resetUserMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -706,6 +1139,8 @@ export interface components {
             donorProfile?: components["schemas"]["ProfileSummary"];
             /** Format: date-time */
             createdAt: string;
+            /** @description Present when the user has role VERIFIER or ADMIN. */
+            mfa?: components["schemas"]["MfaStatus"];
         };
         UpdateProfileRequest: {
             displayName?: string;
@@ -751,6 +1186,8 @@ export interface components {
              * @description Current version, for optimistic locking.
              */
             version: number;
+            /** @description Fields named here are set to null. A field both cleared and given a value is 422 `VALIDATION_FAILED`. Title, expenseType, amount and institutionCountry cannot be cleared. */
+            clearFields?: components["schemas"]["ClearableRequestField"][];
         };
         StatusHistoryEntry: {
             fromStatus?: (string & components["schemas"]["RequestStatus"]) | null;
@@ -947,7 +1384,7 @@ export interface components {
             items: components["schemas"]["AuditEvent"][];
             nextCursor: string | null;
         };
-        /** @description Pledged and confirmed amounts are kept separate. Both are always 0 in this slice. */
+        /** @description pledgedMinor = sum of ACTIVE non-binding pledges; confirmedMinor = confirmed payments (0 until payments exist); pledges are never money raised. */
         FundingProgress: {
             target: components["schemas"]["Money"];
             /** Format: int64 */
@@ -1003,6 +1440,231 @@ export interface components {
         SavedPage: {
             items: components["schemas"]["SavedItem"][];
             nextCursor: string | null;
+        };
+        /**
+         * @description LAPSED is reserved and unused.
+         * @enum {string}
+         */
+        PledgeStatus: "ACTIVE" | "CANCELLED" | "LAPSED";
+        /** @enum {string} */
+        PledgeCancelReason: "DONOR_CANCELLED" | "REQUEST_WITHDRAWN";
+        /** @enum {string} */
+        ReportReason: "SUSPECTED_FRAUD" | "ALTERED_DOCUMENT" | "DUPLICATE_REQUEST" | "INAPPROPRIATE_CONTENT" | "PRIVACY_CONCERN" | "OTHER";
+        /** @enum {string} */
+        ReportStatus: "OPEN" | "IN_REVIEW" | "RESOLVED";
+        /** @enum {string} */
+        ReportResolution: "DISMISSED" | "ACTION_TAKEN";
+        /**
+         * @description OPEN means OPEN plus IN_REVIEW. MINE is assigned to the caller.
+         * @default OPEN
+         * @enum {string}
+         */
+        ReportQueue: "OPEN" | "MINE" | "RESOLVED" | "ALL";
+        /** @enum {string} */
+        PolicyType: "TERMS" | "PRIVACY";
+        /**
+         * @description Optional request fields that PATCH may set to null.
+         * @enum {string}
+         */
+        ClearableRequestField: "story" | "institutionName" | "institutionCity" | "courseName" | "feeReference" | "dueDate";
+        PledgeCreate: {
+            amount: components["schemas"]["Money"];
+            /** @description Must be true. A pledge is not a payment. */
+            acknowledgeNonBinding: boolean;
+        };
+        /** @description A non-binding statement of intent. Not a payment. */
+        Pledge: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            requestId: string;
+            amount: components["schemas"]["Money"];
+            status: components["schemas"]["PledgeStatus"];
+            cancelReason?: (string & components["schemas"]["PledgeCancelReason"]) | null;
+            /** @description Always true. */
+            nonBinding: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            cancelledAt?: string | null;
+        };
+        PublicRequestRef: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            recipientPublicName: string;
+        };
+        PledgeListItem: {
+            pledge: components["schemas"]["Pledge"];
+            /** @description Null when the request is no longer public. */
+            request?: components["schemas"]["PublicRequestRef"] | null;
+        };
+        PledgePage: {
+            items: components["schemas"]["PledgeListItem"][];
+            nextCursor: string | null;
+        };
+        /**
+         * @description `remainingMinor = target - confirmed`; pledges never reduce it. Donor identities are
+         *     never exposed.
+         */
+        FundingSummary: {
+            /** Format: uuid */
+            requestId: string;
+            target: components["schemas"]["Money"];
+            /** Format: int64 */
+            confirmedMinor: number;
+            /** Format: int64 */
+            pledgedMinor: number;
+            /** Format: int64 */
+            remainingMinor: number;
+            /**
+             * Format: int64
+             * @description target - confirmed - active pledges; the largest pledge that is accepted now.
+             */
+            pledgeableMinor: number;
+            /** Format: int64 */
+            activePledgeCount: number;
+            /** @description Always true. */
+            pledgesAreNonBinding: boolean;
+            /** @description The caller's ACTIVE pledge on this request; null when anonymous or none. */
+            viewerPledge?: components["schemas"]["Pledge"] | null;
+        };
+        ReportCreate: {
+            /** Format: uuid */
+            requestId: string;
+            reason: components["schemas"]["ReportReason"];
+            /** @description Required (non-blank) when reason is OTHER. */
+            details?: string;
+        };
+        ReportReceipt: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["ReportStatus"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ReportSummary: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            requestId: string;
+            requestTitle: string;
+            reason: components["schemas"]["ReportReason"];
+            status: components["schemas"]["ReportStatus"];
+            reporter: components["schemas"]["UserSummary"];
+            assignedTo?: components["schemas"]["UserSummary"] | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            resolvedAt?: string | null;
+            resolution?: (string & components["schemas"]["ReportResolution"]) | null;
+            requestOnHold: boolean;
+        };
+        ReportPage: {
+            items: components["schemas"]["ReportSummary"][];
+            nextCursor: string | null;
+        };
+        RequestHold: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            reportId?: string | null;
+            reason: string;
+            placedBy: components["schemas"]["UserSummary"];
+            /** Format: date-time */
+            placedAt: string;
+        };
+        ReportDetail: components["schemas"]["ReportSummary"] & {
+            details?: string | null;
+            resolutionNote?: string | null;
+            resolvedBy?: components["schemas"]["UserSummary"] | null;
+            requestStatus: components["schemas"]["RequestStatus"];
+            /** Format: uuid */
+            latestCaseId?: string | null;
+            hold?: components["schemas"]["RequestHold"] | null;
+            /** @description Other reports on the same request. */
+            otherReports: components["schemas"]["ReportSummary"][];
+            /** @description Whether the caller may resolve this report now. */
+            canResolve: boolean;
+        };
+        ReportResolutionInput: {
+            resolution: components["schemas"]["ReportResolution"];
+            note: string;
+            /**
+             * @description Place a moderation hold on the request. Allowed only with ACTION_TAKEN.
+             * @default false
+             */
+            holdRequest: boolean;
+        };
+        AdminDashboard: {
+            /** Format: int64 */
+            unassignedCases: number;
+            /** Format: int64 */
+            myOpenCases: number;
+            /** Format: int64 */
+            openReports: number;
+            /** Format: int64 */
+            unassignedReports: number;
+            /** Format: int64 */
+            activeHolds: number;
+            /** Format: date-time */
+            generatedAt: string;
+        };
+        PasswordResetRequest: {
+            /** Format: email */
+            email: string;
+        };
+        PasswordResetConfirm: {
+            token: string;
+            /** Format: password */
+            newPassword: string;
+        };
+        ChangePasswordRequest: {
+            /** Format: password */
+            currentPassword: string;
+            /** Format: password */
+            newPassword: string;
+        };
+        ConsentRecord: {
+            policyType: components["schemas"]["PolicyType"];
+            policyVersion: string;
+            /** Format: date-time */
+            acceptedAt: string;
+        };
+        ConsentStatus: {
+            current: components["schemas"]["PolicyVersions"];
+            acceptedTermsVersion?: string | null;
+            acceptedPrivacyVersion?: string | null;
+            reacceptRequired: boolean;
+            /** @description Newest first. */
+            history: components["schemas"]["ConsentRecord"][];
+        };
+        TotpEnrollment: {
+            /** @description Base32 secret, shown once. */
+            secret: string;
+            otpauthUri: string;
+            issuer: string;
+            accountName: string;
+        };
+        TotpCodeInput: {
+            /** @example 123456 */
+            code: string;
+        };
+        /** @description Exactly one of `code` or `recoveryCode` is required (422 otherwise). */
+        MfaVerifyRequest: {
+            /** @example 123456 */
+            code?: string;
+            /** @example ABCDE-12345 */
+            recoveryCode?: string;
+        };
+        MfaRecoveryCodes: {
+            /** @description One-time recovery codes, shown once. */
+            codes: string[];
+        };
+        MfaStatus: {
+            required: boolean;
+            enrolled: boolean;
+            verified: boolean;
         };
     };
     responses: {
@@ -1103,6 +1765,11 @@ export interface components {
         /** @description Opaque base64url cursor from a previous page. */
         Cursor: string;
         Limit: number;
+        PledgeId: string;
+        ReportId: string;
+        UserId: string;
+        /** @description Client-generated key, reused on retry of the same attempt. */
+        IdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;
@@ -1922,6 +2589,599 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    createPledge: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated key, reused on retry of the same attempt. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                requestId: components["parameters"]["RequestId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PledgeCreate"];
+            };
+        };
+        responses: {
+            /** @description Idempotent replay; the existing pledge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pledge"];
+                };
+            };
+            /** @description Pledge created. */
+            201: {
+                headers: {
+                    /** @description URL of the created pledge (`/api/v1/funding/pledges/{id}`). */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pledge"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            409: components["responses"]["ProblemConflict"];
+            422: components["responses"]["ProblemUnprocessable"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    getPledge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pledgeId: components["parameters"]["PledgeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pledge. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pledge"];
+                };
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    cancelPledge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pledgeId: components["parameters"]["PledgeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pledge, now CANCELLED with reason DONOR_CANCELLED. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pledge"];
+                };
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            409: components["responses"]["ProblemConflict"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    listMyPledges: {
+        parameters: {
+            query?: {
+                /** @description Opaque base64url cursor from a previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of the caller's pledges. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PledgePage"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    getFundingSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["RequestId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The funding summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FundingSummary"];
+                };
+            };
+            404: components["responses"]["ProblemNotFound"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    createReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportCreate"];
+            };
+        };
+        responses: {
+            /** @description Report received. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportReceipt"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            409: components["responses"]["ProblemConflict"];
+            422: components["responses"]["ProblemUnprocessable"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    listReports: {
+        parameters: {
+            query?: {
+                queue?: components["schemas"]["ReportQueue"];
+                /** @description Opaque base64url cursor from a previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of reports. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportPage"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    getReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: components["parameters"]["ReportId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Report detail. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportDetail"];
+                };
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    assignReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: components["parameters"]["ReportId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The report, assigned to the caller. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportDetail"];
+                };
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            409: components["responses"]["ProblemConflict"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    resolveReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                reportId: components["parameters"]["ReportId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportResolutionInput"];
+            };
+        };
+        responses: {
+            /** @description The resolved report. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportDetail"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            409: components["responses"]["ProblemConflict"];
+            422: components["responses"]["ProblemUnprocessable"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    releaseRequestHold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: components["parameters"]["RequestId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hold released; the request is public again. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            404: components["responses"]["ProblemNotFound"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    getAdminDashboard: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts for the admin dashboard. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDashboard"];
+                };
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    requestPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted; an email is sent when applicable. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcceptedMessage"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            403: components["responses"]["ProblemForbidden"];
+            422: components["responses"]["ProblemUnprocessable"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    confirmPasswordReset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetConfirm"];
+            };
+        };
+        responses: {
+            /** @description Password changed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            403: components["responses"]["ProblemForbidden"];
+            422: components["responses"]["ProblemUnprocessable"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Password changed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            422: components["responses"]["ProblemUnprocessable"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    getMyConsents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Consent status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentStatus"];
+                };
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    acceptCurrentPolicies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Consents"];
+            };
+        };
+        responses: {
+            /** @description Updated consent status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentStatus"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            422: components["responses"]["ProblemUnprocessable"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    startTotpEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending enrollment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TotpEnrollment"];
+                };
+            };
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            409: components["responses"]["ProblemConflict"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    confirmTotpEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TotpCodeInput"];
+            };
+        };
+        responses: {
+            /** @description Enrollment confirmed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaRecoveryCodes"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            409: components["responses"]["ProblemConflict"];
+            422: components["responses"]["ProblemUnprocessable"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    verifyMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Session is MFA-verified. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUser"];
+                };
+            };
+            400: components["responses"]["ProblemBadRequest"];
+            401: components["responses"]["ProblemUnauthorized"];
+            403: components["responses"]["ProblemForbidden"];
+            422: components["responses"]["ProblemUnprocessable"];
+            429: components["responses"]["ProblemTooManyRequests"];
+            500: components["responses"]["ProblemInternalError"];
+        };
+    };
+    resetUserMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["UserId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MFA reset. */
             204: {
                 headers: {
                     [name: string]: unknown;
