@@ -7,6 +7,6 @@
     "lint": "redocly lint openapi.yaml"
   },
   "devDependencies": {
-    "@redocly/cli": "^2.0.0"
+    "@redocly/cli": "^2.82.0"
   }
 }
